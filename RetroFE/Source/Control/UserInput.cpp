@@ -546,6 +546,7 @@ bool UserInput::update(SDL_Event& e) {
                     if (joysticks_[i] == -1) {
                         joysticks_[i] = id;
                         LOG_INFO("Input", "Joystick connected, assigned to slot " << i);
+                        JoyAxisHandler::registerDevice(static_cast<int>(i), joy);   // learn pedal axes (rest at an extreme)
                         added = true;
                         break;
                     }
@@ -562,6 +563,7 @@ bool UserInput::update(SDL_Event& e) {
             for (unsigned int i = 0; i < cMaxJoy; i++) {
                 if (joysticks_[i] == e.jdevice.which) {
                     joysticks_[i] = -1;
+                    JoyAxisHandler::clearDevice(static_cast<int>(i));
                     LOG_INFO("Input", "Joystick disconnected from slot " << i);
                     break;
                 }
