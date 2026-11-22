@@ -46,6 +46,18 @@
 #include <filesystem>
 #include <memory>
 
+// ArcadeMaster: liveSteer / liveButton / liveHat / liveAxis (+ liveFrom, liveTo, liveDevice) - see Component.h
+static void buildLive(rapidxml::xml_node<>* xml, Component* c) {
+    if (!xml || !c) return;
+    auto num = [&](const char* name, float& out) { rapidxml::xml_attribute<>* a = xml->first_attribute(name); if (!a) return false; try { out = std::stof(a->value()); return true; } catch (...) { return false; } };
+    float v = 0.f;
+    if (num("liveSteer", v))       c->liveSteer = v;                   // can be combined with one of the next three
+    if (num("liveButton", v)) { c->liveKind = Component::LiveButton; c->liveIndex = static_cast<int>(v); }
+    else if (num("liveHat", v))    { c->liveKind = Component::LiveHat;    c->liveIndex = static_cast<int>(v); }
+    else if (num("liveAxis", v))   { c->liveKind = Component::LiveAxis;   c->liveIndex = static_cast<int>(v);
+                                     c->liveFrom = 32767.f; c->liveTo = -32768.f; num("liveFrom", c->liveFrom); num("liveTo", c->liveTo); }
+    if (rapidxml::xml_attribute<>* d = xml->first_attribute("liveDevice")) c->liveDevice = d->value();
+}
 using namespace rapidxml;
 
 static const int MENU_FIRST = 0;   // first visible item in the list
@@ -510,7 +522,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 		c->baseViewInfo.Monitor = monitorXml ? Utils::convertInt(monitorXml->value()) : layoutMonitor;
 		c->baseViewInfo.Layout = page->getCurrentLayout();
 
-		buildViewInfo(componentXml, c->baseViewInfo);
+		buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 		loadTweens(c, componentXml);
 		page->addComponent(c);
 	}
@@ -581,7 +593,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 				c->baseViewInfo.Monitor = monitorXml ? Utils::convertInt(monitorXml->value()) : layoutMonitor;
 				c->baseViewInfo.Layout = page->getCurrentLayout();
 
-				buildViewInfo(componentXml, c->baseViewInfo);
+				buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 				loadTweens(c, componentXml);
 				page->addComponent(c);
 			}
@@ -671,7 +683,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 				c->baseViewInfo.Monitor = monitorXml ? Utils::convertInt(monitorXml->value()) : layoutMonitor;
 				c->baseViewInfo.Layout = page->getCurrentLayout();
 
-				buildViewInfo(componentXml, c->baseViewInfo);
+				buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 				loadTweens(c, componentXml);
 				page->addComponent(c);
 			}
@@ -706,7 +718,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 				c->setMenuScrollReload(true);
 			}
 
-			buildViewInfo(componentXml, c->baseViewInfo);
+			buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 			loadTweens(c, componentXml);
 			page->addComponent(c);
 		}
@@ -725,7 +737,7 @@ bool PageBuilder::buildComponents(xml_node<>* layout, Page* page, const std::str
 			c->setMenuScrollReload(true);
 		}
 
-		buildViewInfo(componentXml, c->baseViewInfo);
+		buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 		loadTweens(c, componentXml);
 		page->addComponent(c);
 		page->setStatusTextComponent(c);
@@ -1001,7 +1013,7 @@ FontManager* PageBuilder::addFont(const xml_node<>* component, const xml_node<>*
 }
 
 void PageBuilder::loadTweens(Component* c, xml_node<>* componentXml) {
-	buildViewInfo(componentXml, c->baseViewInfo);
+	buildViewInfo(componentXml, c->baseViewInfo); buildLive(componentXml, c);
 
 	c->setTweens(createTweenInstance(componentXml));
 }

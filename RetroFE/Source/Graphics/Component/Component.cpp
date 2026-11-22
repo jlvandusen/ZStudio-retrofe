@@ -436,3 +436,56 @@ bool Component::getPauseOnScroll() const
 {
     return pauseOnScroll_;
 }
+
+// ---------------- ArcadeMaster: live controller state (liveSteer / liveButton / liveHat / liveAxis) ----------------
+#include <algorithm>
+#include <cctype>
+
+// the joystick a live component follows: the first open one whose name contains `want` (case-insensitive),
+// or - with no name given - the first whose name contains "wheel", else the first open joystick
+static SDL_Joystick* liveJoystick(const std::string& want) {
+    auto lower = [](std::string s) { std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); }); return s; };
+    const std::string w = lower(want.empty() ? "wheel" : want);
+    SDL_Joystick* first = nullptr;
+    for (int i = 0; i < SDL_NumJoysticks(); ++i) {
+        SDL_Joystick* j = SDL_JoystickFromInstanceID(SDL_JoystickGetDeviceInstanceID(i));
+        if (!j) continue;                                                   // not opened by RetroFE
+        if (!first) first = j;
+        const char* n = SDL_JoystickName(j);
+        if (n && lower(n).find(w) != std::string::npos) return j;
+    }
+    return want.empty() ? first : nullptr;
+}
+
+void Component::liveBegin() {
+    if ((liveKind == LiveNone && liveSteer == 0.f) || !liveStarted_) return;
+    baseViewInfo.Angle = liveAngleBase_;                                    // undo last frame's live offset
+    baseViewInfo.Alpha = liveAlphaBase_;
+}
+
+void Component::liveEnd() {
+    if (liveKind == LiveNone && liveSteer == 0.f) return;
+    liveAngleBase_ = baseViewInfo.Angle; liveAlphaBase_ = baseViewInfo.Alpha; liveStarted_ = true;
+    SDL_Joystick* j = liveJoystick(liveDevice);
+    if (liveSteer != 0.f) {
+        const float v = j ? std::max(-1.f, SDL_JoystickGetAxis(j, 0) / 32767.f) : 0.f;
+        baseViewInfo.Angle = liveAngleBase_ + v * liveSteer;
+    }
+    switch (liveKind) {
+    case LiveButton:
+        baseViewInfo.Alpha = (j && SDL_JoystickGetButton(j, liveIndex)) ? liveAlphaBase_ : 0.f;
+        break;
+    case LiveHat:
+        baseViewInfo.Alpha = (j && SDL_JoystickNumHats(j) > 0 && (SDL_JoystickGetHat(j, 0) & liveIndex)) ? liveAlphaBase_ : 0.f;
+        break;
+    case LiveAxis: {
+        float t = 0.f;
+        const Sint16 raw = j ? SDL_JoystickGetAxis(j, liveIndex) : 0;
+        if (raw != 0) liveAxisMoved_ = true;
+        if (j && liveAxisMoved_ && liveTo != liveFrom) t = (static_cast<float>(raw) - liveFrom) / (liveTo - liveFrom);
+        baseViewInfo.Alpha = liveAlphaBase_ * std::min(1.f, std::max(0.f, t));
+        break;
+    }
+    default: break;
+    }
+}

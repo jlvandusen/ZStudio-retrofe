@@ -70,6 +70,22 @@ public:
 	virtual bool isPaused() { return false; };
 	ViewInfo baseViewInfo;
 	std::string collectionName;
+
+	// ArcadeMaster: live controller state drives a component (layout attributes, read in PageBuilder::buildViewInfo)
+	//   liveSteer="450"          the angle follows the wheel: full lock = +/-450 degrees (900-degree wheel); can be
+	//                            combined with one of the next three (a button glow that turns with the wheel)
+	//   liveButton="4"           shown only while joystick button 4 (0-based) is held
+	//   liveHat="1"              shown while the hat points that way (1 up, 2 right, 4 down, 8 left)
+	//   liveAxis="3" liveFrom="32767" liveTo="-32768"   shown in proportion to how far that axis has moved (pedals)
+	//   liveDevice="G29"         joystick name to follow (default: the first whose name has "wheel", else the first)
+	// Page calls liveBegin() before update() and liveEnd() after it, so animations keep working on the base values.
+	enum LiveKind { LiveNone, LiveButton, LiveHat, LiveAxis };
+	LiveKind liveKind = LiveNone;
+	int liveIndex = 0;
+	float liveSteer = 0.f, liveFrom = 0.f, liveTo = 0.f;
+	std::string liveDevice;
+	void liveBegin();
+	void liveEnd();
 	void setMenuScrollReload(bool menuScrollReload);
 	bool getMenuScrollReload() const;
 	void setAnimationDoneRemove(bool value);
@@ -105,6 +121,9 @@ private:
     static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
+    float        liveAngleBase_ = 0.f, liveAlphaBase_ = 1.f;
+    bool         liveStarted_ = false;
+    bool         liveAxisMoved_ = false;   // SDL reports 0 until a DirectInput axis first moves: dark until then
     unsigned int currentTweenIndex_;
     bool         currentTweenComplete_;
     double       elapsedTweenTime_;

@@ -1452,7 +1452,9 @@ void Page::update(float dt) {
 					(*it)->playlistName = lastPlaylistName_;
 				}
 
+				(*it)->liveBegin();
 				bool done = (*it)->update(dt);
+				(*it)->liveEnd();   // ArcadeMaster: live wheel / button state
 
 				if (!(*it)->isIdle()) {
 					graphicsIdle = false;
@@ -1544,7 +1546,7 @@ void Page::updateReloadables(float dt) {
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
 			if (component) {
-				component->update(dt);
+				component->liveBegin(); component->update(dt); component->liveEnd();
 			}
 		}
 	}
