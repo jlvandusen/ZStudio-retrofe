@@ -15,6 +15,7 @@
  */
 
 #include "Page.h"
+#include "../Control/Haptics.h"   // ArcadeMaster
 #include "ComponentItemBinding.h"
 #include "Component/Component.h"
 #include "../Collection/CollectionInfo.h"
@@ -1897,6 +1898,7 @@ void Page::initializeFonts() const {
 
 
 void Page::playSelect() {
+	Haptics::instance().requestSelect();   // ArcadeMaster
 	if (selectSoundChunk_) {
 		selectSoundChunk_->play();
 	}
@@ -2078,6 +2080,7 @@ void Page::scroll(bool forward, bool playlist) {
 	}
 
 	pendingScrollSelect_ = true;
+	Haptics::instance().requestTick(forward);   // ArcadeMaster: detent per item
 
 	if (highlightSoundChunk_) {
 		highlightSoundChunk_->play();

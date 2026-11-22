@@ -15,6 +15,7 @@
  */
 
 #include "Video/GStreamerVideo.h"
+#include "Control/Haptics.h"
 #include "Video/GlibLoop.h"
 #include "Database/Configuration.h"
 #include "Database/DB.h"
@@ -367,6 +368,7 @@ int main(int argc, char** argv)
         LOG_ERROR("EXCEPTION", e.what());
     }
 
+    Haptics::instance().shutdown();   // ArcadeMaster: stop all forces before exit
     ThreadPool::getInstance().shutdown();
     GlibLoop::instance().stop();
     gst_deinit();

@@ -1,4 +1,4 @@
-﻿/* This file is part of RetroFE.
+/* This file is part of RetroFE.
  *
  * RetroFE is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +20,7 @@
 #include "Collection/Item.h"
 #include "Collection/MenuParser.h"
 #include "Control/Restrictor/RestrictorManager.h"
+#include "Control/Haptics.h"   // ArcadeMaster: frontend force feedback
 #include "Control/UserInput.h"
 #include "Database/Configuration.h"
 #include "Database/GlobalOpts.h"
@@ -463,6 +464,7 @@ void RetroFE::initializeMusicPlayer() {
 
 // Launch a game/program
 void RetroFE::launchEnter() {
+	Haptics::instance().launchPulseAndRelease();   // ArcadeMaster: rumble, then give the wheel's FFB to the game
 	currentPage_->setIsLaunched(true);
 	SDL_SetWindowGrab(SDL::getWindow(0), SDL_FALSE);
 
@@ -505,6 +507,7 @@ void RetroFE::launchExit(bool userInitiated) {
 
 	currentPage_->setIsLaunched(false);
 	VideoPool::shuttingDown_ = false;
+	Haptics::instance().reacquire();   // ArcadeMaster: frontend FFB back after the game
 
 	bool unloadSDL = false;
 	config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
@@ -724,6 +727,30 @@ void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
 }
 
 // Run RetroFE
+// ---------------------------------------------------------------------------
+// ArcadeMaster: frame-time telemetry. settings.conf "perfLog = N" logs every N seconds:
+//   frames, p50 / p95 / p99 / max frame time and hitches (> 2x target frame time).
+// ---------------------------------------------------------------------------
+static int g_perfLogSec = 0;
+static void perfSample(double frameMs, double targetMs, double nowMs) {
+	if (g_perfLogSec <= 0) return;
+	static std::vector<float> samples;
+	static double windowStart = 0.0;
+	if (windowStart == 0.0) windowStart = nowMs;
+	if (frameMs > 0.0 && frameMs < 5000.0) samples.push_back(static_cast<float>(frameMs));
+	if (nowMs - windowStart < g_perfLogSec * 1000.0 || samples.size() < 10) return;
+	std::vector<float> s(samples);
+	std::sort(s.begin(), s.end());
+	auto pct = [&](double p) { return s[std::min(s.size() - 1, static_cast<size_t>(p * (s.size() - 1)))]; };
+	const size_t hitches = static_cast<size_t>(std::count_if(s.begin(), s.end(), [&](float v) { return v > 2.0 * targetMs; }));
+	char buf[256];
+	snprintf(buf, sizeof(buf), "%zu frames in %.1fs | frame ms p50 %.2f  p95 %.2f  p99 %.2f  max %.2f | hitches(>%.1fms) %zu",
+		s.size(), (nowMs - windowStart) / 1000.0, pct(0.50), pct(0.95), pct(0.99), s.back(), 2.0 * targetMs, hitches);
+	LOG_INFO("Perf", buf);
+	samples.clear();
+	windowStart = nowMs;
+}
+
 bool RetroFE::run() {
 #ifdef WIN32    
 	bool highPriority = false;
@@ -809,6 +836,8 @@ bool RetroFE::run() {
 		LOG_ERROR("RetroFE", "Could not initialize user controls on the main thread");
 		return false;
 	}
+	Haptics::instance().initialize(config_);   // ArcadeMaster: frontend force feedback (ffb = yes)
+	config_.getProperty("perfLog", g_perfLogSec);   // ArcadeMaster: frame-time telemetry interval (s)
 
 	// =================================================================
 	// PHASE 3: CONTEXT PROPERTY CONVERSION ZONE (Eliminates the Data Race)
@@ -1079,6 +1108,7 @@ bool RetroFE::run() {
 		SDL_Event e;
 		while (SDL_PollEvent(&e)) input_.update(e);
 		input_.updateKeystate(); // once per frame, AFTER consuming events, BEFORE processUserInput()
+		Haptics::instance().pump(); // ArcadeMaster: execute queued FFB effects on the main thread
 
 		if (initialized.load() && mp) {
 			mp->pump();
@@ -1116,6 +1146,7 @@ bool RetroFE::run() {
 
 		float rawDt = static_cast<float>((frameNowMs - lastFrameTimePointMs_) / 1000.0);
 		lastFrameTimePointMs_ = frameNowMs;
+		perfSample(rawDt * 1000.0, fpsTime, frameNowMs);   // ArcadeMaster: frame-time telemetry (perfLog = N seconds)
 
 		timerDt = std::clamp(rawDt, 0.0f, MAX_TIMER_DT);
 
@@ -2007,6 +2038,7 @@ bool RetroFE::run() {
 			case RETROFE_NEXT_PAGE_MENU_ENTER:
 			if (currentPage_ && currentPage_->isIdle())
 			{
+				Haptics::instance().requestThunk();   // ArcadeMaster: "gear change" when a collection opens
 				inputClear = false;
 				config_.getProperty(OPTION_COLLECTIONINPUTCLEAR, inputClear);
 				if (inputClear)
