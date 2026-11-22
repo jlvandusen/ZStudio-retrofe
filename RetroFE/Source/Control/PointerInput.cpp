@@ -7,7 +7,9 @@
 #include "PointerInput.h"
 #include "../Database/Configuration.h"
 #include "../Utility/Log.h"
+#include "../SDL.h"
 #include <cmath>
+#include <regex>
 #include <utility>
 
 PointerInput::PointerInput(Configuration& config) : config_(config) { loadConfig(); }
@@ -33,30 +35,52 @@ const char* PointerInput::name(Gesture g) {
     return (g >= 0 && g < GestureCount) ? n[g] : "?";
 }
 
-void PointerInput::pulse(Gesture g, Uint32 now) {
-    pulseUntil_[g] = now + pulseMs_;
-    LOG_DEBUG("Pointer", std::string("gesture ") + name(g));
+// RetroFE monitor number of the window under the finger (-1 if unknown, e.g. a touch outside our windows)
+int PointerInput::screenOfWindow(Uint32 windowID) {
+    if (windowID == 0) return -1;
+    for (int s = 0; s < SDL::getNumScreens() && s < MaxScreens; ++s) {
+        SDL_Window* w = SDL::getWindow(s);
+        if (w && SDL_GetWindowID(w) == windowID) return s;
+    }
+    return -1;
+}
+
+void PointerInput::pulse(Gesture g, Uint32 now, int slot) {
+    pulseUntil_[0][g] = now + pulseMs_;                                    // "any screen"
+    if (slot > 0) pulseUntil_[slot][g] = now + pulseMs_;                   // and the screen it happened on
+    LOG_DEBUG("Pointer", std::string("gesture ") + name(g) + (slot > 0 ? " on screen " + std::to_string(slot - 1) : ""));
 }
 
 void PointerInput::reset() {
-    active_.fill(false);
-    pulseUntil_.fill(0);
+    for (auto& a : active_) a.fill(false);
+    for (auto& p : pulseUntil_) p.fill(0);
+    lastRegionTap_.fill(LastTap{});
     fingers_.clear();
     maxFingersThisTouch_ = 0;
     longPressFired_ = false;
     axisAccX_ = axisAccY_ = 0.f;
 }
 
+bool PointerInput::tapInRegion(int screen, int col, int cols, int row, int rows) const {
+    const LastTap& t = lastRegionTap_[slotOf(screen)];
+    if (SDL_GetTicks() >= t.until) return false;
+    if (cols > 0) { int c = static_cast<int>(t.x * cols) + 1; if (c > cols) c = cols; if (c != col) return false; }
+    if (rows > 0) { int r = static_cast<int>(t.y * rows) + 1; if (r > rows) r = rows; if (r != row) return false; }
+    return true;
+}
+
 void PointerInput::feed(const SDL_Event& e) {
     const Uint32 now = SDL_GetTicks();
     if (e.type == SDL_FINGERDOWN || e.type == SDL_FINGERUP)
-        LOG_DEBUG("Pointer", (e.type == SDL_FINGERDOWN ? "finger down " : "finger up ") << e.tfinger.fingerId << " @ " << e.tfinger.x << "," << e.tfinger.y);
+        LOG_DEBUG("Pointer", (e.type == SDL_FINGERDOWN ? "finger down " : "finger up ") << e.tfinger.fingerId << " @ " << e.tfinger.x << "," << e.tfinger.y
+                  << " screen " << screenOfWindow(e.tfinger.windowID));
     else if (e.type == SDL_MOUSEWHEEL)
         LOG_DEBUG("Pointer", "wheel " << e.wheel.x << "," << e.wheel.y << " which=" << e.wheel.which);
     switch (e.type) {
     case SDL_FINGERDOWN: {
         if (fingers_.empty()) { maxFingersThisTouch_ = 0; longPressFired_ = false; }
-        fingers_[e.tfinger.fingerId] = Finger{ e.tfinger.x, e.tfinger.y, e.tfinger.x, e.tfinger.y, now, false };
+        const int slot = slotOf(screenOfWindow(e.tfinger.windowID));
+        fingers_[e.tfinger.fingerId] = Finger{ e.tfinger.x, e.tfinger.y, e.tfinger.x, e.tfinger.y, now, false, slot };
         if (static_cast<int>(fingers_.size()) > maxFingersThisTouch_) maxFingersThisTouch_ = static_cast<int>(fingers_.size());
         break;
     }
@@ -75,30 +99,32 @@ void PointerInput::feed(const SDL_Event& e) {
         fingers_.erase(it);
         const Uint32 dt = now - f.t0;
         const float dx = e.tfinger.x - f.x0, dy = e.tfinger.y - f.y0;
+        const int s = f.slot;
 
         if (maxFingersThisTouch_ >= 2) {
             // two-finger tap: fires once when the last finger of a short, still, multi-finger touch lifts
-            if (fingers_.empty() && dt <= tapMaxMs_ + 150 && !f.moved) pulse(TwoFingerTap, now);
+            if (fingers_.empty() && dt <= tapMaxMs_ + 150 && !f.moved) pulse(TwoFingerTap, now, s);
             break;
         }
         if (longPressFired_) break;                                        // the press already did its job
 
         if (!f.moved && dt <= tapMaxMs_) {
-            pulse(Tap, now);
-            if (f.x0 < 1.f / 3) pulse(TapLeft, now); else if (f.x0 > 2.f / 3) pulse(TapRight, now);
-            if (f.y0 < 1.f / 3) pulse(TapTop, now);  else if (f.y0 > 2.f / 3) pulse(TapBottom, now);
-            if (f.x0 >= 1.f / 3 && f.x0 <= 2.f / 3 && f.y0 >= 1.f / 3 && f.y0 <= 2.f / 3) pulse(TapCenter, now);
-            if (now - lastTapTime_ <= doubleTapMs_ &&
-                std::fabs(f.x0 - lastTapX_) < moveTolerance_ * 2 && std::fabs(f.y0 - lastTapY_) < moveTolerance_ * 2) {
-                pulse(DoubleTap, now);
-                lastTapTime_ = 0;                                          // a triple tap is not two doubles
+            pulse(Tap, now, s);
+            for (int slot : { 0, s }) { lastRegionTap_[slot].until = now + pulseMs_; lastRegionTap_[slot].x = f.x0; lastRegionTap_[slot].y = f.y0; }
+            if (f.x0 < 1.f / 3) pulse(TapLeft, now, s); else if (f.x0 > 2.f / 3) pulse(TapRight, now, s);
+            if (f.y0 < 1.f / 3) pulse(TapTop, now, s);  else if (f.y0 > 2.f / 3) pulse(TapBottom, now, s);
+            if (f.x0 >= 1.f / 3 && f.x0 <= 2.f / 3 && f.y0 >= 1.f / 3 && f.y0 <= 2.f / 3) pulse(TapCenter, now, s);
+            if (now - lastTapTime_[s] <= doubleTapMs_ &&
+                std::fabs(f.x0 - lastTapX_[s]) < moveTolerance_ * 2 && std::fabs(f.y0 - lastTapY_[s]) < moveTolerance_ * 2) {
+                pulse(DoubleTap, now, s);
+                lastTapTime_[s] = 0;                                       // a triple tap is not two doubles
             } else {
-                lastTapTime_ = now; lastTapX_ = f.x0; lastTapY_ = f.y0;
+                lastTapTime_[s] = now; lastTapX_[s] = f.x0; lastTapY_[s] = f.y0;
             }
         }
         else if (dt <= swipeMaxMs_ && (std::fabs(dx) >= swipeMinDist_ || std::fabs(dy) >= swipeMinDist_)) {
-            if (std::fabs(dy) >= std::fabs(dx)) pulse(dy < 0 ? SwipeUp : SwipeDown, now);
-            else                                pulse(dx < 0 ? SwipeLeft : SwipeRight, now);
+            if (std::fabs(dy) >= std::fabs(dx)) pulse(dy < 0 ? SwipeUp : SwipeDown, now, s);
+            else                                pulse(dx < 0 ? SwipeLeft : SwipeRight, now, s);
         }
         break;
     }
@@ -127,30 +153,32 @@ void PointerInput::feed(const SDL_Event& e) {
 
 void PointerInput::tick() {
     const Uint32 now = SDL_GetTicks();
+    std::array<std::array<bool, 4>, Slots> drag{};                         // U D L R per slot
 
-    // long press: one still finger held past the threshold
     if (fingers_.size() == 1 && maxFingersThisTouch_ == 1 && !longPressFired_) {
         const Finger& f = fingers_.begin()->second;
-        if (!f.moved && now - f.t0 >= longPressMs_) { pulse(LongPress, now); longPressFired_ = true; }
-    }
-
-    // drag: one finger held away from where it started -> behave like a held direction key
-    bool dragU = false, dragD = false, dragL = false, dragR = false;
-    if (fingers_.size() == 1 && maxFingersThisTouch_ == 1 && !longPressFired_) {
-        const Finger& f = fingers_.begin()->second;
-        const float dx = f.x - f.x0, dy = f.y - f.y0;
-        if (std::fabs(dy) >= std::fabs(dx)) { if (dy <= -dragDeadzone_) dragU = true; else if (dy >= dragDeadzone_) dragD = true; }
-        else                                { if (dx <= -dragDeadzone_) dragL = true; else if (dx >= dragDeadzone_) dragR = true; }
+        // long press: one still finger held past the threshold
+        if (!f.moved && now - f.t0 >= longPressMs_) { pulse(LongPress, now, f.slot); longPressFired_ = true; }
+        // drag: one finger held away from where it started -> behave like a held direction key
+        else {
+            const float dx = f.x - f.x0, dy = f.y - f.y0; int d = -1;
+            if (std::fabs(dy) >= std::fabs(dx)) { if (dy <= -dragDeadzone_) d = 0; else if (dy >= dragDeadzone_) d = 1; }
+            else                                { if (dx <= -dragDeadzone_) d = 2; else if (dx >= dragDeadzone_) d = 3; }
+            if (d >= 0) { drag[0][d] = true; if (f.slot > 0) drag[f.slot][d] = true; }
+        }
     }
 
     // slowly bleed off sub-step trackball motion so tiny drifts never add up to a phantom step
     axisAccX_ *= 0.9f; axisAccY_ *= 0.9f;
 
-    for (int g = 0; g < GestureCount; ++g) active_[g] = now < pulseUntil_[g];
-    active_[DragUp] = dragU; active_[DragDown] = dragD; active_[DragLeft] = dragL; active_[DragRight] = dragR;
+    for (int s = 0; s < Slots; ++s) {
+        for (int g = 0; g < GestureCount; ++g) active_[s][g] = now < pulseUntil_[s][g];
+        active_[s][DragUp] = drag[s][0]; active_[s][DragDown] = drag[s][1]; active_[s][DragLeft] = drag[s][2]; active_[s][DragRight] = drag[s][3];
+    }
 }
 
-bool PointerInput::parse(const std::string& s, Gesture& out) {
+// "touch1tapleft" -> (TapLeft, screen 1); "touchtap" -> (Tap, -1); mouse tokens are never screen-specific
+bool PointerInput::parse(const std::string& s, Gesture& out, int& screen) {
     static const std::pair<const char*, Gesture> names[] = {
         {"touchtap", Tap}, {"touchdoubletap", DoubleTap}, {"touchlongpress", LongPress}, {"touchtwofingertap", TwoFingerTap},
         {"touchswipeup", SwipeUp}, {"touchswipedown", SwipeDown}, {"touchswipeleft", SwipeLeft}, {"touchswiperight", SwipeRight},
@@ -162,6 +190,20 @@ bool PointerInput::parse(const std::string& s, Gesture& out) {
         {"spinnerleft", AxisXMinus}, {"spinnerright", AxisXPlus},
         {"trackballleft", AxisXMinus}, {"trackballright", AxisXPlus}, {"trackballup", AxisYMinus}, {"trackballdown", AxisYPlus},
     };
-    for (const auto& n : names) { if (s == n.first) { out = n.second; return true; } }
+    std::string key = s; screen = -1;
+    if (key.size() > 5 && key.compare(0, 5, "touch") == 0 && std::isdigit(static_cast<unsigned char>(key[5]))) {
+        screen = key[5] - '0'; key.erase(5, 1);                            // "touch1tap" -> "touchtap" on screen 1
+    }
+    for (const auto& n : names) { if (key == n.first) { out = n.second; return true; } }
     return false;
+}
+
+bool PointerInput::parseRegion(const std::string& s, int& screen, int& col, int& cols, int& row, int& rows) {
+    static const std::regex re("^touch(\\d)?(?:column(\\d+)of(\\d+))?(?:row(\\d+)of(\\d+))?$");
+    std::smatch m;
+    if (!std::regex_match(s, m, re) || (!m[2].matched && !m[4].matched)) return false;
+    screen = m[1].matched ? std::stoi(m[1].str()) : -1;
+    col = m[2].matched ? std::stoi(m[2].str()) : 0; cols = m[3].matched ? std::stoi(m[3].str()) : 0;
+    row = m[4].matched ? std::stoi(m[4].str()) : 0; rows = m[5].matched ? std::stoi(m[5].str()) : 0;
+    return (cols == 0 || (col >= 1 && col <= cols)) && (rows == 0 || (row >= 1 && row <= rows));
 }

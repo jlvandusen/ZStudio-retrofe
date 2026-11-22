@@ -204,11 +204,18 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
     else {
         std::string tokenLowered = Utils::toLower(token);
         PointerInput::Gesture gesture;
+        int pScreen = -1, pCol = 0, pCols = 0, pRow = 0, pRows = 0;
 
-        if (PointerInput::parse(tokenLowered, gesture)) {
-            // ArcadeMaster: touchTap, touchSwipeUp, touchDragDown, mouseWheelUp, mouseAxisX+, spinnerLeft, ...
-            keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GestureHandler(*pointer_, gesture), key));
+        if (PointerInput::parse(tokenLowered, gesture, pScreen)) {
+            // ArcadeMaster: touchTap, touch1SwipeUp (screen 1 only), touchDragDown, mouseWheelUp, mouseAxisX+, spinnerLeft, ...
+            keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GestureHandler(*pointer_, gesture, pScreen), key));
             LOG_INFO("Input", "Binding pointer gesture " + token + " to " + configKey);
+            found = true;
+        }
+        else if (PointerInput::parseRegion(tokenLowered, pScreen, pCol, pCols, pRow, pRows)) {
+            // ArcadeMaster: on-screen touch buttons, e.g. touch1Column3of5Row3of3
+            keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new RegionTapHandler(*pointer_, pScreen, pCol, pCols, pRow, pRows), key));
+            LOG_INFO("Input", "Binding touch region " + token + " to " + configKey);
             found = true;
         }
         else if (tokenLowered.find("mouse") == 0) {

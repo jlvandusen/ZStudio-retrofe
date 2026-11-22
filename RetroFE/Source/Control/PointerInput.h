@@ -13,10 +13,12 @@
 class Configuration;
 
 // One shared recogniser for pointer-style input. UserInput feeds it every SDL event and ticks it
-// once per frame; GestureHandler instances (one per controls.conf token) just query it.
+// once per frame; GestureHandler / RegionTapHandler instances (one per controls.conf token) just query it.
 //
 //   touch:  tap, double tap, long press, two-finger tap, swipe (fling) x4, drag (held scroll) x4,
-//           zone taps (left/right/top/bottom/center thirds of the screen)
+//           zone taps (left/right/top/bottom/center thirds), and REGION taps (column/row grid cells)
+//           - per screen: "touch1Tap" only reacts to touches on RetroFE screen 1 (e.g. a pedestal /
+//             marquee touchscreen), "touchTap" to any screen. Screens are RetroFE monitor numbers.
 //   mouse:  wheel x4, relative axis x4 (trackballs, spinners: nudge = one step, spin = held scroll)
 //
 // Discrete gestures become a short "key tap" pulse (pulseMs) so RetroFE's state machine can't miss them;
@@ -32,33 +34,43 @@ public:
         AxisXMinus, AxisXPlus, AxisYMinus, AxisYPlus,
         GestureCount
     };
+    static const int MaxScreens = 8;
+    static const int Slots = MaxScreens + 1;          // slot 0 = any screen, slot s+1 = screen s
 
     explicit PointerInput(Configuration& config);
     void loadConfig();                 // controls.touch* / controls.mouseAxis* tunables
     void feed(const SDL_Event& e);     // every SDL event
     void tick();                       // once per frame, before handlers are polled
-    bool active(Gesture g) const { return active_[g]; }
+    bool active(Gesture g, int screen = -1) const { return active_[slotOf(screen)][g]; }
+    // true while the last tap on `screen` (-1 = any) fell in grid cell (col of cols, row of rows), 1-based
+    bool tapInRegion(int screen, int col, int cols, int row, int rows) const;
     void reset();
 
-    // "touchSwipeUp" -> SwipeUp, "mouseAxisX+" -> AxisXPlus ... returns false if unknown
-    static bool parse(const std::string& lowered, Gesture& out);
+    // "touchSwipeUp" -> SwipeUp (screen -1), "touch1Tap" -> Tap on screen 1, "mouseAxisX+" -> AxisXPlus
+    static bool parse(const std::string& lowered, Gesture& out, int& screen);
+    // "touch1Column2of5", "touchRow3of3", "touch1Column1of5Row3of3" -> region tap
+    static bool parseRegion(const std::string& lowered, int& screen, int& col, int& cols, int& row, int& rows);
 
 private:
-    void pulse(Gesture g, Uint32 now);
+    static int slotOf(int screen) { return (screen < 0 || screen >= MaxScreens) ? 0 : screen + 1; }
+    static int screenOfWindow(Uint32 windowID);
+    void pulse(Gesture g, Uint32 now, int slot = 0);
     static const char* name(Gesture g);
-    void hold(Gesture g, Uint32 now, Uint32 ms) { if (now + ms > pulseUntil_[g]) pulseUntil_[g] = now + ms; }
+    void hold(Gesture g, Uint32 now, Uint32 ms) { if (now + ms > pulseUntil_[0][g]) pulseUntil_[0][g] = now + ms; }
 
-    struct Finger { float x0, y0, x, y; Uint32 t0; bool moved; };
+    struct Finger { float x0, y0, x, y; Uint32 t0; bool moved; int slot; };
+    struct LastTap { Uint32 until = 0; float x = -1.f, y = -1.f; };
 
     Configuration& config_;
-    std::array<bool, GestureCount> active_{};
-    std::array<Uint32, GestureCount> pulseUntil_{};
+    std::array<std::array<bool, GestureCount>, Slots> active_{};
+    std::array<std::array<Uint32, GestureCount>, Slots> pulseUntil_{};
+    std::array<LastTap, Slots> lastRegionTap_{};
 
     std::map<SDL_FingerID, Finger> fingers_;
     int  maxFingersThisTouch_ = 0;
     bool longPressFired_ = false;
-    Uint32 lastTapTime_ = 0;
-    float lastTapX_ = -1.f, lastTapY_ = -1.f;
+    std::array<Uint32, Slots> lastTapTime_{};
+    std::array<float, Slots> lastTapX_{}, lastTapY_{};
 
     float axisAccX_ = 0.f, axisAccY_ = 0.f;
 
