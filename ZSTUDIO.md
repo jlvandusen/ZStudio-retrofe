@@ -11,6 +11,9 @@ A fork of [CoinOPS-Official/RetroFE](https://github.com/CoinOPS-Official/RetroFE
 | Cabinets | No modal crash dialog (it blocked unattended cabinets forever). Opt in with `RETROFE_CRASH_DIALOG=1`. |
 | Input | **Touch**: tap / double tap / long press / two-finger tap / swipes / drag-scroll / screen-zone taps. **Mouse wheel.** **Trackball and spinner** (relative axes). Touch-synthesised clicks are ignored so lightgun/mouse bindings never double-fire. Token reference: `controls.conf` section below. |
 
+| Force feedback | **The wheel is part of the UI** (opt-in `ffb = yes`): centring spring + damper while browsing, detent tick per item in the scroll direction, gear-change thunk on collection enter, rumble on select/launch. The device is **released before a game launches** (exclusive DirectInput FFB goes to the game) and re-acquired after. Tunables: `ffbDevice`, `ffbStrength`, `ffbCenter`, `ffbDamper`, `ffbTick`, `ffbTickMs`, `ffbThunk`, `ffbSelect`, `ffbLaunch`. |
+| Telemetry | `perfLog = N`: frame-time p50/p95/p99/max + hitches every N seconds |
+
 ## Build (Windows, MSVC x64)
 
 Requirements: VS 2022 Build Tools (C++), CMake (bundled with VS), Git, and the **GStreamer 1.24.x MSVC x86_64 runtime + devel** MSIs. They can be unpacked without installing: `msiexec /a <msi> /qn TARGETDIR=<dir>`.
