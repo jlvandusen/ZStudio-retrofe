@@ -20,6 +20,11 @@ class Configuration;
 //           - per screen: "touch1Tap" only reacts to touches on RetroFE screen 1 (e.g. a pedestal /
 //             marquee touchscreen), "touchTap" to any screen. Screens are RetroFE monitor numbers.
 //   mouse:  wheel x4, relative axis x4 (trackballs, spinners: nudge = one step, spin = held scroll)
+//   mouse-type touch panels: many cheap USB touch boards (e.g. ByQDtech 0483:5750 on HDMI pedestal panels) report
+//           as an absolute MOUSE, not a digitizer, so Windows sends clicks, not fingers. controls.mouseTouchScreens
+//           = "1" (comma list of RetroFE screens) turns a left press / drag / release inside those screens' windows
+//           into a finger, so every touch gesture and region tap works; the cursor jump onto that screen is not
+//           mistaken for trackball motion.
 //
 // Discrete gestures become a short "key tap" pulse (pulseMs) so RetroFE's state machine can't miss them;
 // continuous ones (drag, axis) behave like a held key, so RetroFE's own scroll acceleration applies.
@@ -73,6 +78,17 @@ private:
     std::array<float, Slots> lastTapX_{}, lastTapY_{};
 
     float axisAccX_ = 0.f, axisAccY_ = 0.f;
+
+    // mouse-type touch panels (controls.mouseTouchScreens)
+    bool isMouseTouchScreen(int screen) const { return screen >= 0 && screen < MaxScreens && mouseTouchScreen_[screen]; }
+    void feedMouseFinger(Uint32 type, Uint32 windowID, Sint32 x, Sint32 y);
+    std::array<bool, MaxScreens> mouseTouchScreen_{};
+    void parkCursor();
+    bool anyMouseTouch() const { for (bool b : mouseTouchScreen_) if (b) return true; return false; }
+    bool mouseTouchDown_ = false;
+    bool warpPending_ = false; int warpX_ = 0, warpY_ = 0;
+    Uint32 mouseTouchWindow_ = 0;
+    float  mouseTouchJumpPx_ = 150.f;  // one motion event this large onto a touch screen = the touch's cursor jump
 
     // tunables (normalised screen units for touch, pixels for mouse axes)
     Uint32 pulseMs_ = 90;

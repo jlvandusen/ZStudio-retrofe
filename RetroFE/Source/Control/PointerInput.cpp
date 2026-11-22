@@ -26,6 +26,34 @@ void PointerInput::loadConfig() {
     if (config_.getProperty("controls.touchDragDeadzone", f) && f > 0)   dragDeadzone_ = f;    // fraction of screen
     if (config_.getProperty("controls.mouseAxisStep", f) && f > 0)       axisStep_ = f;        // pixels (counts) per step
     if (config_.getProperty("controls.mouseAxisHoldMs", i) && i > 0)     axisHoldMs_ = static_cast<Uint32>(i);
+    if (config_.getProperty("controls.mouseTouchJumpPx", f) && f > 0)    mouseTouchJumpPx_ = f;
+    mouseTouchScreen_.fill(false);
+    std::string screens;
+    if (config_.getProperty("controls.mouseTouchScreens", screens)) {      // "1" or "1,2"
+        for (char c : screens) if (c >= '0' && c < '0' + MaxScreens) mouseTouchScreen_[c - '0'] = true;
+    }
+}
+
+// hidden cursor back to the middle of screen 0; the motion event the warp generates is skipped in feed()
+void PointerInput::parkCursor() {
+    SDL_Window* w0 = SDL::getWindow(0); int ww = 0, wh = 0; if (w0) SDL_GetWindowSize(w0, &ww, &wh);
+    if (!w0 || ww <= 0 || wh <= 0) return;
+    warpX_ = ww / 2; warpY_ = wh / 2; warpPending_ = true;
+    SDL_WarpMouseInWindow(w0, warpX_, warpY_);
+}
+
+// a left press / drag / release from a mouse-type touch panel becomes finger 0x7A7A on that window
+void PointerInput::feedMouseFinger(Uint32 type, Uint32 windowID, Sint32 x, Sint32 y) {
+    SDL_Window* w = SDL_GetWindowFromID(windowID);
+    int ww = 0, wh = 0; if (w) SDL_GetWindowSize(w, &ww, &wh);
+    if (ww <= 0 || wh <= 0) return;
+    SDL_Event f{};
+    f.type = type;
+    f.tfinger.touchId = 0; f.tfinger.fingerId = 0x7A7A;
+    f.tfinger.x = std::fmin(1.f, std::fmax(0.f, static_cast<float>(x) / ww));
+    f.tfinger.y = std::fmin(1.f, std::fmax(0.f, static_cast<float>(y) / wh));
+    f.tfinger.pressure = 1.f; f.tfinger.windowID = windowID;
+    feed(f);
 }
 
 const char* PointerInput::name(Gesture g) {
@@ -136,10 +164,41 @@ void PointerInput::feed(const SDL_Event& e) {
         if (x > 0) pulse(WheelRight, now); else if (x < 0) pulse(WheelLeft, now);
         break;
     }
+    case SDL_MOUSEBUTTONDOWN:
+    case SDL_MOUSEBUTTONUP: {
+        if (e.button.which == SDL_TOUCH_MOUSEID || e.button.button != SDL_BUTTON_LEFT) break;
+        if (e.type == SDL_MOUSEBUTTONDOWN) {
+            if (!isMouseTouchScreen(screenOfWindow(e.button.windowID))) break;
+            mouseTouchDown_ = true; mouseTouchWindow_ = e.button.windowID;
+            axisAccX_ = axisAccY_ = 0.f;                                   // the press is not trackball motion
+            feedMouseFinger(SDL_FINGERDOWN, e.button.windowID, e.button.x, e.button.y);
+        } else if (mouseTouchDown_) {
+            mouseTouchDown_ = false; axisAccX_ = axisAccY_ = 0.f;
+            feedMouseFinger(SDL_FINGERUP, mouseTouchWindow_, e.button.x, e.button.y);
+            parkCursor();                                                  // the trackball carries on from screen 0
+
+        }
+        break;
+    }
     case SDL_MOUSEMOTION: {
         if (e.motion.which == SDL_TOUCH_MOUSEID) break;                    // touch already handled as fingers
+        if (mouseTouchDown_) { feedMouseFinger(SDL_FINGERMOTION, mouseTouchWindow_, e.motion.x, e.motion.y); break; }
+        // the cursor teleporting onto a mouse-type touch screen (a new touch) is not a trackball spin
+        if (isMouseTouchScreen(screenOfWindow(e.motion.windowID)) &&
+            std::fabs(static_cast<float>(e.motion.xrel)) + std::fabs(static_cast<float>(e.motion.yrel)) >= mouseTouchJumpPx_) { axisAccX_ = axisAccY_ = 0.f; break; }
+        if (warpPending_ && e.motion.x == warpX_ && e.motion.y == warpY_) { warpPending_ = false; break; }   // our own re-centre
         axisAccX_ += static_cast<float>(e.motion.xrel);
         axisAccY_ += static_cast<float>(e.motion.yrel);
+        // without relative mode (mouse-type touch panel present) the trackball moves a hidden desktop cursor: keep it in
+        // the middle of screen 0 so it never stalls at a desktop edge or wanders onto the touch screen
+        if (anyMouseTouch()) {
+            SDL_Window* w0 = SDL::getWindow(0); int ww = 0, wh = 0; if (w0) SDL_GetWindowSize(w0, &ww, &wh);
+            const bool onMain = w0 && e.motion.windowID == SDL_GetWindowID(w0);
+            const int m = 16;
+            if (!isMouseTouchScreen(screenOfWindow(e.motion.windowID)) &&      // never pull the cursor off the touch panel
+                w0 && ww > 2 * m && wh > 2 * m && (!onMain || e.motion.x < m || e.motion.y < m || e.motion.x > ww - m || e.motion.y > wh - m))
+                parkCursor();
+        }
         // each full step re-arms a short hold: a nudge = one tap, a spin = held key (RetroFE accelerates)
         while (axisAccX_ >= axisStep_)  { hold(AxisXPlus, now, axisHoldMs_);  axisAccX_ -= axisStep_; }
         while (axisAccX_ <= -axisStep_) { hold(AxisXMinus, now, axisHoldMs_); axisAccX_ += axisStep_; }
@@ -153,6 +212,9 @@ void PointerInput::feed(const SDL_Event& e) {
 
 void PointerInput::tick() {
     const Uint32 now = SDL_GetTicks();
+    // a mouse-type touch panel needs absolute clicks on its own screen: RetroFE turns relative mouse mode on at SDL init
+    // (and again after every game), before controls.conf is read - so switch it off here, every frame it comes back
+    if (anyMouseTouch() && SDL_GetRelativeMouseMode()) { SDL_SetRelativeMouseMode(SDL_FALSE); parkCursor(); }
     std::array<std::array<bool, 4>, Slots> drag{};                         // U D L R per slot
 
     if (fingers_.size() == 1 && maxFingersThisTouch_ == 1 && !longPressFired_) {
