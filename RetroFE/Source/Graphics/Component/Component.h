@@ -1,0 +1,121 @@
+/* This file is part of RetroFE.
+ *
+ * RetroFE is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * RetroFE is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
+ */
+#pragma once
+
+#include <vector>
+
+#include "../../SDL.h"
+#include "../Page.h"
+#include "../ViewInfo.h"
+#include "../Animate/Tween.h"
+#include "../Animate/AnimationEvents.h"
+#include "../../Collection/Item.h"
+#include <memory>
+#include <map>
+
+class IVideo;
+
+class Component {
+public:
+	explicit Component(Page& p);
+	virtual ~Component();
+	virtual void freeGraphicsMemory();
+	virtual void allocateGraphicsMemory();
+	virtual void deInitializeFonts();
+	virtual void initializeFonts();
+	virtual void pumpGraphicsPreparation() {}
+	virtual bool isGraphicsReadyForFirstRender() const { return true; }
+	const std::string& getAnimationRequestedType() const;
+	void triggerEvent(const std::string_view& event, int menuIndex = -1);
+	void setPlaylist(const std::string_view& name);
+	void setNewItemSelected();
+	void setNewScrollItemSelected();
+	bool isIdle() const;
+	bool isAttractIdle() const;
+	bool isMenuScrolling() const;
+	bool isPlaylistScrolling() const;
+	void setTweens(const std::shared_ptr<AnimationEvents>& set) const;
+	bool newItemSelected;
+	bool newScrollItemSelected;
+	void setId(int id);
+
+	virtual std::string_view filePath();
+	virtual bool update(float dt);
+	virtual void draw();
+	void setTweens(const std::shared_ptr<AnimationEvents>& set);
+	virtual bool isPlaying();
+	virtual bool isJukeboxPlaying();
+	virtual void skipForward() {};
+	virtual void skipBackward() {};
+	virtual void skipForwardp() {};
+	virtual void skipBackwardp() {};
+	virtual void pause() {};
+	virtual void resume() {};
+	virtual void restart() {};
+	virtual unsigned long long getCurrent() { return 0; };
+	virtual unsigned long long getDuration() { return 0; };
+	virtual bool isPaused() { return false; };
+	ViewInfo baseViewInfo;
+	std::string collectionName;
+	void setMenuScrollReload(bool menuScrollReload);
+	bool getMenuScrollReload() const;
+	void setAnimationDoneRemove(bool value);
+	bool getAnimationDoneRemove() const;
+	void setPauseOnScroll(bool value);
+	bool getPauseOnScroll() const;
+	virtual void setText(const std::string&, int = -1) {};
+	virtual void setImage(const std::string&, int = -1) {};
+	virtual void setHighPriority(bool /*isHigh*/) {};
+	int getId() const;
+	std::string playlistName;
+
+	static void clearSharedTextures();
+	virtual bool recycleAsVideo(const std::string& /*path*/, const std::string& /*name*/) { return false; }
+	virtual std::shared_ptr<IVideo> extractVideo() { return nullptr; }
+	virtual bool recycleAsImage(const std::string& /*newFilePath*/, const std::string & /*newAltPath*/ = "") { return false; }
+	virtual bool recycleAsText(const std::string& /*newText*/) { return false; }
+
+protected:
+	Page& page;
+
+private:
+
+	bool animate();
+
+    std::shared_ptr<AnimationEvents> tweens_;
+	Animation* currentAnimation_ = nullptr;
+	Animation  dynamicAnimation_;
+	Animation* cachedIdleAnimation_ = nullptr;
+	int lastMenuIndexForCache_ = -2; // Use -2 so index 0 or -1 triggers an initial fetch
+	std::shared_ptr<AnimationEvents> lastTweensForCache_ = nullptr;
+	SDL_Texture *backgroundTexture_;
+    static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
+    bool         pauseOnScroll_;
+    ViewInfo     storeViewInfo_;
+    unsigned int currentTweenIndex_;
+    bool         currentTweenComplete_;
+    double       elapsedTweenTime_;
+    std::string  animationRequestedType_;
+    std::string  animationType_;
+    bool         animationRequested_;
+	bool isIdleAnimationType_ = true;
+	bool isAttractIdleAnimationType_ = true;
+    bool         menuScrollReload_;
+    bool         animationDoneRemove_;
+    int          menuIndex_;
+    int          id_;
+
+};

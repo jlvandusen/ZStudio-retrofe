@@ -1,0 +1,715 @@
+/* This file is part of RetroFE.
+*
+* RetroFE is free software: you can redistribute it and/or modify
+* it under the terms of the GNU General Public License as published by
+* the Free Software Foundation, either version 3 of the License, or
+* (at your option) any later version.
+*
+* RetroFE is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
+*
+* You should have received a copy of the GNU General Public License
+* along with RetroFE.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "Utils.h"
+#include "../Database/Configuration.h"
+#include "Log.h"
+#include <algorithm>
+#include <sstream>
+#include <fstream>
+#include <locale>
+#include <list>
+#include <filesystem>
+#include <unordered_set>
+#include <unordered_map>
+#include <codecvt>
+#include <thread>
+#include <cmath>
+#ifndef __APPLE__
+#include <charconv>
+#endif
+
+#ifdef WIN32
+#include <Windows.h>
+#include <psapi.h>
+#endif
+
+#ifdef WIN32
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
+
+// Initialize the static member variables
+#ifdef __APPLE__
+#include <mach/mach.h>
+std::unordered_map<std::filesystem::path, std::shared_ptr<const Utils::FileSet>, PathHash> Utils::fileCache;
+std::unordered_set<std::filesystem::path, PathHash> Utils::nonExistingDirectories;
+#else
+std::unordered_map<std::filesystem::path, std::shared_ptr<const Utils::FileSet>> Utils::fileCache;
+std::unordered_set<std::filesystem::path> Utils::nonExistingDirectories;
+#endif
+
+namespace fs = std::filesystem;
+
+std::shared_mutex Utils::fileCacheMutex;
+
+Utils::Utils() = default;
+
+Utils::~Utils() = default;
+
+#ifdef WIN32
+void Utils::postMessage( LPCTSTR windowTitle, UINT Msg, WPARAM wParam, LPARAM lParam ) {
+    HWND hwnd = FindWindow(NULL, windowTitle);
+    if (hwnd != NULL) {
+        PostMessage(hwnd, Msg, wParam, lParam);
+    }
+}
+#endif
+
+std::filesystem::path Utils::normalizeCacheKey(const std::filesystem::path& p) {
+    // Normalize path shape first (removes .., ., duplicate separators, etc.)
+    std::filesystem::path key = p.lexically_normal().make_preferred();
+
+#ifdef _WIN32
+    // Windows: make directory keys case-insensitive by lowercasing the whole key.
+    // Use wstring so we don't byte-lower UTF-8.
+    std::wstring ws = key.wstring();
+    std::transform(ws.begin(), ws.end(), ws.begin(),
+        [](wchar_t c) { return static_cast<wchar_t>(towlower(c)); });
+    return std::filesystem::path(ws).make_preferred();
+#else
+    return key;
+#endif
+}
+
+// Utility function to convert std::wstring to std::string
+std::string Utils::wstringToString(const std::wstring wstr) {
+    if (wstr.empty()) {
+        return std::string();
+    }
+
+#ifdef WIN32
+    // Windows: use native WinAPI for best compatibility
+    int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), nullptr, 0, nullptr, nullptr);
+    std::string strTo(size_needed, 0);
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), strTo.data(), size_needed, nullptr, nullptr);
+    return strTo;
+#else
+    // Non-Windows: use standard library conversion
+    static std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.to_bytes(wstr);
+#endif
+}
+
+static inline bool is_valid_directory(const fs::path& dir) {
+    std::error_code ec;
+    // Accept real directories OR symlinks/junctions that resolve to directories
+    if (!fs::exists(dir, ec) || ec) return false;
+    if (fs::is_directory(dir, ec) && !ec) return true;                 // follows symlinks on most libs
+    auto s = fs::symlink_status(dir, ec); if (ec) return false;
+    if (fs::is_symlink(s)) {
+        // Resolve target and check if it is a directory
+        auto st = fs::status(dir, ec); if (ec) return false;            // follows link
+        return fs::is_directory(st);
+    }
+    return false;
+}
+
+// Returns true if the entry should be included (regular file OR link-to-file)
+static inline bool is_file_or_link_to_file(const fs::directory_entry& de) {
+    std::error_code ec;
+    // Fast path: regular file
+    if (de.is_regular_file(ec) && !ec) return true;
+    ec.clear();
+
+    // If it's a symlink, check the resolved target
+    if (de.is_symlink(ec) && !ec) {
+        // status() follows the link and reports the target
+        auto st = fs::status(de.path(), ec);
+        if (!ec && fs::is_regular_file(st)) return true;
+    }
+    return false;
+}
+
+// Coarse sleep only: no steady_clock spin.
+void Utils::coarseSleep(double seconds_to_sleep) {
+    if (seconds_to_sleep <= 0.0) return;
+
+    // Leave a tiny margin so the caller can spin to exact SDL tick.
+    constexpr double margin_s = 0.0005; // 0.5ms (tune)
+    double s = seconds_to_sleep - margin_s;
+    if (s > 0.0)
+        std::this_thread::sleep_for(std::chrono::duration<double>(s));
+}
+
+void Utils::preciseSleep(double seconds_to_sleep) {
+    using namespace std::chrono;
+
+    if (seconds_to_sleep <= 0.0) {
+        return;
+    }
+
+    // How much time we want to reserve for the final spin.
+    // 0.5 ms is a decent compromise on Windows + SDL_HINT_TIMER_RESOLUTION=1.
+    constexpr double spin_tail_s = 0.0005; // 0.5 ms
+
+    // Decide how much we ask the OS to sleep.
+    double coarse_s = seconds_to_sleep - spin_tail_s;
+    if (coarse_s < 0.0) {
+        coarse_s = 0.0;
+    }
+
+    const auto target_time = steady_clock::now() + duration<double>(seconds_to_sleep);
+
+    // Coarse sleep first, if it’s worth it.
+    if (coarse_s > 0.0002) { // avoid crazy tiny sleeps
+        std::this_thread::sleep_for(duration<double>(coarse_s));
+    }
+
+    // Spin for the remainder (or for the whole time if seconds_to_sleep was tiny).
+    while (steady_clock::now() < target_time) {
+        // very short spin; no yield/pause needed here
+    }
+}
+
+std::string Utils::toLower(const std::string& inputStr)
+{
+    std::string str = inputStr;
+    for (auto& ch : str) {
+        // Explicitly cast the result of std::tolower back to char
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return str;
+}
+
+std::string Utils::uppercaseFirst(std::string str)
+{
+    if(str.length() > 0) {
+        std::locale loc;
+        str[0] = std::toupper(str[0], loc);
+    }
+
+    return str;
+}
+
+std::string Utils::filterComments(const std::string& line) {
+    // Use string_view to efficiently find the comment position
+    std::string_view lineView(line);
+    size_t position = lineView.find("#");
+    if (position != std::string_view::npos) {
+        // Narrow down the view to exclude the comment
+        lineView = lineView.substr(0, position);
+    }
+
+    // Convert the string_view back to a string to perform modifications
+    std::string result(lineView.begin(), lineView.end());
+
+    // Remove carriage return characters from the string
+    result.erase(std::remove(result.begin(), result.end(), '\r'), result.end());
+
+    return result;
+}
+
+void Utils::populateCache(const std::filesystem::path& directory) {
+    namespace fs = std::filesystem;
+
+    const fs::path dirKey = normalizeCacheKey(directory);
+
+    {
+        std::shared_lock lock(fileCacheMutex);
+
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            LOG_FILECACHE("Skip", "Directory previously marked missing: " + removeAbsolutePath(dirKey.string()));
+            return;
+        }
+
+        if (fileCache.find(dirKey) != fileCache.end()) {
+            return; // already populated
+        }
+    }
+
+    LOG_FILECACHE("Populate", "Populating cache for directory: " + dirKey.string());
+
+    if (!is_valid_directory(directory)) {
+        std::unique_lock lock(fileCacheMutex);
+        nonExistingDirectories.insert(dirKey);
+        LOG_FILECACHE("Skip", "Directory not present/not a directory: " + removeAbsolutePath(dirKey.string()));
+        return;
+    }
+
+    FileSet files;
+
+    std::error_code ec;
+    fs::directory_options opts = fs::directory_options::skip_permission_denied;
+    fs::directory_iterator it(directory, opts, ec), end;
+
+    if (ec) {
+        std::unique_lock lock(fileCacheMutex);
+        nonExistingDirectories.insert(dirKey);
+        LOG_FILECACHE("Skip", "Failed to open directory (ec): " + removeAbsolutePath(dirKey.string()));
+        return;
+    }
+
+    for (; it != end; it.increment(ec)) {
+        if (ec) { ec.clear(); continue; }
+        if (!is_file_or_link_to_file(*it)) continue;
+
+        std::string fname = it->path().filename().string();
+#ifdef _WIN32
+        fname = Utils::toLower(fname); // keep your existing behavior
+#endif
+        files.insert(std::move(fname));
+    }
+
+    auto constFilesPtr = std::make_shared<const FileSet>(std::move(files));
+
+    {
+        std::unique_lock lock(fileCacheMutex);
+
+        // Double-check under lock
+        if (fileCache.find(dirKey) == fileCache.end() &&
+            nonExistingDirectories.find(dirKey) == nonExistingDirectories.end()) {
+            fileCache.emplace(dirKey, std::move(constFilesPtr));
+        }
+    }
+}
+
+std::shared_ptr<const Utils::FileSet>
+Utils::getOrPopulateFileSet(const std::filesystem::path& directory) {
+    const auto dirKey = normalizeCacheKey(directory);
+
+    {
+        std::shared_lock lock(fileCacheMutex);
+
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            return {};
+        }
+
+        auto it = fileCache.find(dirKey);
+        if (it != fileCache.end()) {
+            return it->second; // copy shared_ptr (safe)
+        }
+    }
+
+    // Not populated yet
+    populateCache(directory);
+
+    // Try again
+    {
+        std::shared_lock lock(fileCacheMutex);
+
+        if (nonExistingDirectories.find(dirKey) != nonExistingDirectories.end()) {
+            return {};
+        }
+
+        auto it = fileCache.find(dirKey);
+        if (it != fileCache.end()) {
+            return it->second;
+        }
+    }
+
+    return {};
+}
+
+bool Utils::findMatchingFile(const std::string& prefix,
+    const std::vector<std::string>& extensions,
+    std::string& file) {
+    constexpr size_t kStack = 16;
+    std::string_view stack[kStack];
+
+    const size_t n = extensions.size();
+    if (n == 0) return false;
+
+    if (n <= kStack) {
+        for (size_t i = 0; i < n; ++i) stack[i] = extensions[i];
+        return findMatchingFile(std::string_view(prefix), stack, stack + n, file);
+    }
+
+    std::vector<std::string_view> views;
+    views.reserve(n);
+    for (const auto& s : extensions) views.emplace_back(s);
+
+    return findMatchingFile(std::string_view(prefix), views.data(), views.data() + views.size(), file);
+}
+
+bool Utils::findMatchingFile(std::string_view prefixNoExt,
+    const std::string_view* extsBegin,
+    const std::string_view* extsEnd,
+    std::string& outPath) {
+    namespace fs = std::filesystem;
+
+    const fs::path absolutePath =
+        (fs::path(Configuration::absolutePath) / fs::path(std::string(prefixNoExt))).lexically_normal();
+
+    const fs::path baseDirPath = absolutePath.parent_path();
+    const std::string baseFileName = absolutePath.filename().string();
+
+    auto files = getOrPopulateFileSet(baseDirPath);
+    if (!files) {
+        LOG_FILECACHE("Skip", "Skipping non-existing directory: " + removeAbsolutePath(baseDirPath.string()));
+        return false;
+    }
+
+#ifdef _WIN32
+    const std::string baseSource = Utils::toLower(baseFileName);
+#else
+    const std::string& baseSource = baseFileName; // Reference to avoid a copy on non-Windows
+#endif
+
+    std::string candidate = baseSource;
+    candidate.push_back('.');
+    const size_t prefixLen = candidate.length();
+
+    // Pre-reserve enough space for the longest expected extension (e.g., .jpeg, .webp)
+    candidate.reserve(prefixLen + 8);
+
+    for (auto it = extsBegin; it != extsEnd; ++it) {
+        const std::string_view ext = *it;
+
+        // Truncate back to "filename." and append the new extension
+        candidate.resize(prefixLen);
+        candidate.append(ext.data(), ext.size());
+
+        if (files->find(candidate) != files->end()) {
+            outPath = (baseDirPath / candidate).string();
+
+            // Only log if necessary; string concatenation in logs can be expensive
+            LOG_FILECACHE("Hit", removeAbsolutePath(baseDirPath.string()) + " contains " + candidate);
+            return true;
+        }
+    }
+
+    LOG_FILECACHE("Miss", removeAbsolutePath(baseDirPath.string()) + " does not contain file '" + baseFileName + "'");
+    return false;
+}
+
+
+
+std::string Utils::replace(
+    std::string subject,
+    const std::string_view& search,
+    const std::string_view& replace)
+{
+    if (search.empty())
+        return subject; // Early exit if search string is empty
+
+    size_t pos = 0;
+    while ((pos = subject.find(search, pos)) != std::string::npos)
+    {
+        subject.replace(pos, search.length(), replace);
+        pos += replace.length();
+    }
+    return subject;
+}
+
+
+float Utils::convertFloat(const std::string_view& content) {
+    float retVal = 0;
+#ifdef __APPLE__
+    std::stringstream ss;
+    ss << content;
+    ss >> retVal;
+#else
+    std::from_chars_result result = std::from_chars(content.data(), content.data() + content.size(), retVal, std::chars_format::general);
+    if (result.ec == std::errc::invalid_argument || result.ec == std::errc::result_out_of_range) {
+        retVal = 0.0f; // Handle error or set default value
+    }
+#endif
+    return retVal;
+}
+
+int Utils::convertInt(const std::string_view& content) {
+    int retVal = 0;
+#ifdef __APPLE__
+    std::stringstream ss;
+    ss << content;
+    ss >> retVal;
+#else
+    std::from_chars_result result = std::from_chars(content.data(), content.data() + content.size(), retVal);
+    if (result.ec == std::errc::invalid_argument || result.ec == std::errc::result_out_of_range) {
+        // Handle error or set default value
+        retVal = 0;
+    }
+#endif
+    return retVal;
+}
+
+void Utils::replaceSlashesWithUnderscores(std::string &content)
+{
+    std::replace(content.begin(), content.end(), '\\', '_');
+    std::replace(content.begin(), content.end(), '/', '_');
+}
+
+
+std::string Utils::getDirectory(const std::string& filePath)
+{
+
+    std::string directory = filePath;
+
+    const size_t last_slash_idx = filePath.rfind(pathSeparator);
+    if (std::string::npos != last_slash_idx) {
+        directory = filePath.substr(0, last_slash_idx);
+    }
+
+    return directory;
+}
+
+std::string Utils::getParentDirectory(std::string directory) 
+{
+    size_t last_slash_idx = directory.find_last_of(pathSeparator);
+    if (directory.length() - 1 == last_slash_idx) {
+        directory = directory.erase(last_slash_idx, directory.length() - 1);
+        last_slash_idx = directory.find_last_of(pathSeparator);
+    }
+
+    if (std::string::npos != last_slash_idx) {
+        directory = directory.erase(last_slash_idx, directory.length());
+    }
+
+    // If the directory ends with a drive letter (e.g., "C:"), append a backslash to form a valid root path
+    if (directory.length() == 2 && directory[1] == ':') {
+        directory += pathSeparator;
+    }
+
+    return directory;
+}
+
+std::string Utils::getEnvVar(std::string const& key)
+{
+    char const* val = std::getenv(key.c_str());
+
+    return val == NULL ? std::string() : std::string(val);
+}
+
+void Utils::setEnvVar(const std::string& var, const std::string& value) {
+#ifdef _WIN32
+    // On Windows, use _putenv_s
+    if (_putenv_s(var.c_str(), value.c_str()) != 0) {
+        LOG_ERROR("Utils", "Failed to set GST_DEBUG_DUMP_DOT_DIR environment variable.");
+    }
+#else
+    // On Unix-like systems, use setenv
+    if (setenv(var.c_str(), value.c_str(), 1) != 0) {
+        LOG_ERROR("Utils", "Failed to set GST_DEBUG_DUMP_DOT_DIR environment variable.");
+    }
+#endif
+}
+
+std::string Utils::getFileName(const std::string& filePath) {
+    return std::filesystem::path(filePath).filename().string();
+}
+
+
+std::string Utils::trimEnds(const std::string& str) {
+    std::string_view strView = str;
+
+    // Find the first and last characters not of tabs or spaces
+    size_t trimStart = strView.find_first_not_of(" \t");
+    size_t trimEnd = strView.find_last_not_of(" \t");
+
+    // If no non-space/tab characters are found, return an empty string
+    if (trimStart == std::string_view::npos) return "";
+
+    // Otherwise, create a substring view of the trimmed section
+    std::string_view trimmedView = strView.substr(trimStart, trimEnd - trimStart + 1);
+
+    // Return a string constructed from the trimmed view
+    return std::string(trimmedView.begin(), trimmedView.end());
+}
+
+
+void Utils::listToVector( const std::string& str, std::vector<std::string> &vec, char delimiter = ',' )
+{
+    std::string value;
+    std::size_t current;
+    std::size_t previous = 0;
+    current = str.find( delimiter );
+    while (current != std::string::npos) {
+        value = Utils::trimEnds(str.substr(previous, current - previous));
+        if (value != "") {
+            vec.push_back(value);
+        }
+        previous = current + 1;
+        current  = str.find( delimiter, previous );
+    }
+    value = Utils::trimEnds(str.substr(previous, current - previous));
+    if (value != "") {
+        vec.push_back(value);
+    }
+}
+
+
+int Utils::gcd( int a, int b )
+{
+    if (b == 0)
+        return a;
+    return gcd( b, a % b );
+}
+
+std::string Utils::trim(std::string str)
+{
+    str.erase(str.find_last_not_of(' ') + 1);         //suffixing spaces
+    str.erase(0, str.find_first_not_of(' '));       //prefixing spaces
+    return str;
+}
+
+bool Utils::isAbsolutePath(const std::string& path) {
+    return fs::path(path).is_absolute();
+}
+
+bool Utils::isSubPath(const std::string& candidate) {
+    if (candidate.empty())
+        return false;
+
+    fs::path base = fs::path(Configuration::absolutePath);
+    fs::path abs = fs::path(candidate);
+
+    if (!abs.is_absolute())
+        abs = base / abs; // resolve relative to RetroFE root
+
+    std::error_code ec;
+    fs::path baseCanon = fs::weakly_canonical(base, ec);
+    fs::path absCanon = fs::weakly_canonical(abs, ec);
+
+#ifdef _WIN32
+    auto toLower = [](std::string s) {
+        std::transform(s.begin(), s.end(), s.begin(),
+            [](unsigned char c) { return std::tolower(c); });
+        return s;
+        };
+#endif
+
+    auto bIt = baseCanon.begin();
+    auto aIt = absCanon.begin();
+
+    for (; bIt != baseCanon.end(); ++bIt, ++aIt) {
+        if (aIt == absCanon.end())
+            return false; // candidate shorter than base
+#ifdef _WIN32
+        if (toLower(bIt->string()) != toLower(aIt->string()))
+            return false;
+#else
+        if (*bIt != *aIt)
+            return false;
+#endif
+    }
+    return true; // base is prefix of candidate
+}
+
+
+std::string Utils::removeAbsolutePath(const std::string& fullPath) {
+    std::string rootPath = Configuration::absolutePath; // Get the absolute path
+    std::size_t found = fullPath.find(rootPath);
+
+    if (found != std::string::npos) {
+        // Remove the rootPath part from fullPath
+        return fullPath.substr(0, found) + "." + fullPath.substr(found + rootPath.length());
+    }
+    return fullPath; // Return the original path if root is not found
+}
+
+// Check if we're starting retrofe from terminal on Win or Unix
+bool Utils::isOutputATerminal() {
+#ifdef _WIN32
+    return _isatty(_fileno(stdout));
+#else
+    return isatty(STDOUT_FILENO);
+#endif
+}
+
+// Check if start of fullString contains startOfString
+bool Utils::startsWith(const std::string& fullString, const std::string& startOfString) {
+    return fullString.substr(0, startOfString.length()) == startOfString;
+}
+
+// Check if start of fullString contains startOfString and then remove
+bool Utils::startsWithAndStrip(std::string& fullString, const std::string& startOfString) {
+    if (fullString.substr(0, startOfString.length()) == startOfString) {
+        fullString = fullString.substr(startOfString.length());
+        return true;
+    }
+    return false;
+}
+
+
+std::string Utils::getOSType(){
+#ifdef WIN32
+    std::string osType = "windows";
+#elif __APPLE__
+    std::string osType = "apple";
+#else
+    std::string osType = "linux";
+#endif
+    return osType;
+}
+
+// Define the obfuscation key (simple and hard-coded for now)
+const std::string Utils::obfuscationKey = "s3cReT123!";
+
+// Public method to obfuscate data using XOR with the key
+std::string Utils::obfuscate(const std::string& data) {
+    return xorOperation(data, obfuscationKey);
+}
+
+// Public method to de-obfuscate data (same as obfuscate due to XOR symmetry)
+std::string Utils::deobfuscate(const std::string& data) {
+    return xorOperation(data, obfuscationKey);
+}
+
+// Private helper method to apply XOR obfuscation
+std::string Utils::xorOperation(const std::string& data, const std::string& key) {
+    std::string result = data;
+    for (size_t i = 0; i < data.size(); ++i) {
+        result[i] = data[i] ^ key[i % key.size()];
+    }
+    return result;
+}
+
+std::string Utils::removeNullCharacters(const std::string& input) {
+    std::string output;
+    output.reserve(input.size());  // Reserve space for efficiency
+    for (char ch : input) {
+        if (ch != '\0') {  // Filter out null characters
+            output += ch;
+        }
+    }
+    return output;
+}
+
+size_t Utils::getMemoryUsage() {
+#ifdef _WIN32
+    PROCESS_MEMORY_COUNTERS pmc = {};
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc))) {
+        return pmc.WorkingSetSize / 1024;
+    }
+    return 0;
+#elif defined(__APPLE__)
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+        (task_info_t)&info, &infoCount) == KERN_SUCCESS) {
+        return info.resident_size / 1024;
+    }
+    return 0;
+#elif defined(__linux__)
+    std::ifstream status("/proc/self/status");
+    std::string line;
+    while (std::getline(status, line)) {
+        if (line.compare(0, 6, "VmRSS:") == 0) {
+            // Find the first digit in the string
+            size_t firstDigit = line.find_first_of("0123456789");
+            if (firstDigit != std::string::npos) {
+                // Convert the substring to a number
+                return std::stoul(line.substr(firstDigit));
+            }
+        }
+    }
+    return 0;
+#else
+    return 0;
+#endif
+}
