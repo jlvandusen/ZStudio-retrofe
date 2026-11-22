@@ -43,6 +43,8 @@ The `Package/Environment/Windows/retrofe` submodule ships **GStreamer 1.22.7** D
 
 `touchTap`, `touchDoubleTap`, `touchLongPress`, `touchTwoFingerTap`, `touchSwipeUp/Down/Left/Right`, `touchDragUp/Down/Left/Right`, `touchTapLeft/Right/Top/Bottom/Center`, `mouseWheelUp/Down/Left/Right`, `mouseAxisX-/X+/Y-/Y+` (aliases `mouseX±`, `mouseY±`, `spinnerLeft/Right`, `trackballUp/Down/Left/Right`).
 
+Per screen: prefix the screen number - `touch1Tap`, `touch1SwipeUp` ... only react to touches on RetroFE screen 1 (e.g. a pedestal / marquee touchscreen). On-screen buttons: `touch[N]Column<c>of<n>[Row<r>of<m>]`, e.g. `touch1Column3of5Row3of3` = middle button of a 5-button bar along the bottom of screen 1.
+
 Tunables: `touchPulseMs` (90), `touchTapMaxMs` (300), `touchDoubleTapMs` (350), `touchLongPressMs` (650), `touchSwipeMaxMs` (450), `touchMoveTolerance` (0.03), `touchSwipeMinDistance` (0.12), `touchDragDeadzone` (0.05), `mouseAxisStep` (30), `mouseAxisHoldMs` (120).
 
 Example (touch kiosk):
