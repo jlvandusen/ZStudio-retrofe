@@ -1397,6 +1397,7 @@ bool RetroFE::run() {
 			if (currentPage_->getScrolling() == Page::ScrollDirectionIdle && currentPage_->isMenuIdle())
 			{
 				nextPageItem_ = currentPage_->getSelectedItem();
+				if (!nextPageItem_) { setState(RETROFE_IDLE); break; } // ArcadeMaster fix: empty list -> no selected item
 				bool enterOnCollection = true;
 				config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
 				if (nextPageItem_->leaf || (!attractMode_ && !enterOnCollection))
@@ -2192,6 +2193,7 @@ bool RetroFE::run() {
 				{
 					currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
 					nextPageItem_ = currentPage_->getSelectedItem();
+					if (!nextPageItem_) { setState(RETROFE_IDLE); break; } // ArcadeMaster fix: empty list
 
 					bool enterOnCollection = true;
 					config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
@@ -2359,11 +2361,12 @@ bool RetroFE::run() {
 			{
 				currentPage_->setScrolling(Page::ScrollDirectionIdle); // Stop scrolling
 				nextPageItem_ = currentPage_->getSelectedItem();
+				if (!nextPageItem_) { setState(RETROFE_IDLE); break; } // ArcadeMaster fix: empty list
 				bool enterOnCollection = true;
 				config_.getProperty(OPTION_ENTERONCOLLECTION, enterOnCollection);
 
 				// Current selection is a game or enterOnCollection is not set
-				if (currentPage_->getSelectedItem()->leaf || !enterOnCollection)
+				if (nextPageItem_->leaf || !enterOnCollection)
 				{
 					setState(RETROFE_HIGHLIGHT_REQUEST);
 				}

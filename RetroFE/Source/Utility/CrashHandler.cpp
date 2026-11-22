@@ -134,12 +134,18 @@ void CrashHandler::logAndShowCrash(const std::string& errorReason, const std::st
         "A diagnostic binary minidump and call stack trace have been forced to your log file.\n"
         "Please send your layout configurations and log.txt to the developer.";
 
-    SDL_ShowSimpleMessageBox(
-        SDL_MESSAGEBOX_ERROR,
-        "RetroFE - Fatal Application Error",
-        popupMsg.c_str(),
-        nullptr
-    );
+    // ArcadeMaster: unattended cabinets must not block on a modal dialog (it waits for a mouse click forever).
+    // The crash is already in log.txt + retrofe_crash.dmp; the boot launcher restarts RetroFE.
+    // Set RETROFE_CRASH_DIALOG=1 to get the popup back on a desktop/dev machine.
+    const char* wantDialog = std::getenv("RETROFE_CRASH_DIALOG");
+    if (wantDialog && std::string(wantDialog) == "1") {
+        SDL_ShowSimpleMessageBox(
+            SDL_MESSAGEBOX_ERROR,
+            "RetroFE - Fatal Application Error",
+            popupMsg.c_str(),
+            nullptr
+        );
+    }
 }
 
 // ------------------------------------------------------------------------
@@ -171,9 +177,37 @@ long __stdcall CrashHandler::windowsExceptionFilter(struct _EXCEPTION_POINTERS* 
     void* stackBuffer[64];
     USHORT frames = CaptureStackBackTrace(0, 64, stackBuffer, nullptr);
     ss << "Stack Trace (" << frames << " frames captured):\n";
+    // ArcadeMaster: resolve module!symbol (file:line) via dbghelp when a PDB sits next to the exe
+    HANDLE proc = GetCurrentProcess();
+    SymSetOptions(SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS | SYMOPT_LOAD_LINES);
+    const bool symOk = SymInitialize(proc, nullptr, TRUE) != FALSE;
+    alignas(SYMBOL_INFO) char symBuf[sizeof(SYMBOL_INFO) + 256] = {};
+    auto* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen = 255;
     for (USHORT i = 0; i < frames; ++i) {
-        ss << "  [" << i << "] Frame Offset: 0x" << std::hex << reinterpret_cast<uintptr_t>(stackBuffer[i]) << "\n";
+        const DWORD64 addr = reinterpret_cast<DWORD64>(stackBuffer[i]);
+        ss << "  [" << std::dec << i << "] 0x" << std::hex << addr;
+        HMODULE mod = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(stackBuffer[i]), &mod) && mod) {
+            char modPath[MAX_PATH] = {};
+            GetModuleFileNameA(mod, modPath, MAX_PATH);
+            ss << " " << fs::path(modPath).filename().string() << "+0x" << std::hex << (addr - reinterpret_cast<DWORD64>(mod));
+        }
+        DWORD64 disp = 0;
+        if (symOk && SymFromAddr(proc, addr, &disp, sym)) {
+            ss << " " << sym->Name << "+0x" << std::hex << disp;
+            IMAGEHLP_LINE64 line = {};
+            line.SizeOfStruct = sizeof(line);
+            DWORD lineDisp = 0;
+            if (SymGetLineFromAddr64(proc, addr, &lineDisp, &line)) {
+                ss << " (" << fs::path(line.FileName).filename().string() << ":" << std::dec << line.LineNumber << ")";
+            }
+        }
+        ss << "\n";
     }
+    if (symOk) SymCleanup(proc);
 
     g_CrashHandlerInstance->logAndShowCrash(reason, ss.str());
     return 1;

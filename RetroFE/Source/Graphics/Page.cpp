@@ -1026,7 +1026,12 @@ void Page::exitGame() {
 
 const std::string& Page::getPlaylistName() const {
 	static const std::string emptyString = "";
-	return !collections_.empty() ? playlist_->first : emptyString;
+	// ArcadeMaster fix: an empty collection has no playlists, so playlist_ == playlists.end();
+	// dereferencing it crashed RetroFE (EXCEPTION_ACCESS_VIOLATION in RetroFE::run on collection enter).
+	if (collections_.empty() || !collections_.back().collection ||
+		playlist_ == collections_.back().collection->playlists.end())
+		return emptyString;
+	return playlist_->first;
 }
 
 
@@ -1041,6 +1046,8 @@ void Page::favPlaylist() {
 }
 
 void Page::nextPlaylist() {
+	if (collections_.empty() || collections_.back().collection->playlists.empty())
+		return; // ArcadeMaster fix: nothing to cycle (would dereference end())
 	MenuInfo_S& info = collections_.back();
 	size_t numlists = info.collection->playlists.size();
 
@@ -1073,6 +1080,8 @@ void Page::nextPlaylist() {
 }
 
 void Page::prevPlaylist() {
+	if (collections_.empty() || collections_.back().collection->playlists.empty())
+		return; // ArcadeMaster fix: nothing to cycle (would dereference begin()==end())
 	MenuInfo_S& info = collections_.back();
 	size_t numlists = info.collection->playlists.size();
 
