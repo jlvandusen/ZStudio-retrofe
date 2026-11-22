@@ -26,9 +26,10 @@
 #include "JoyHatHandler.h"
 #include "KeyboardHandler.h"
 #include "MouseButtonHandler.h"
+#include "GestureHandler.h"
 
 UserInput::UserInput(Configuration &c)
-    : config_(c)
+    : config_(c), pointer_(std::make_unique<PointerInput>(c))
 {
     for(unsigned int i = 0; i < KeyCodeMax; ++i) {
         currentKeyState_[i] = false;
@@ -54,6 +55,7 @@ bool UserInput::initialize()
 {
     sdlGameController_ = false;
     config_.getProperty(OPTION_SDLGAMECONTROLLER, sdlGameController_);
+    pointer_->loadConfig();
 
     if (sdlGameController_) {
         LOG_INFO("Input", "SDL GameController mode enabled");
@@ -201,8 +203,15 @@ bool UserInput::HandleInputMapping(const std::string& token, KeyCode_E key, cons
     }
     else {
         std::string tokenLowered = Utils::toLower(token);
+        PointerInput::Gesture gesture;
 
-        if (tokenLowered.find("mouse") == 0) {
+        if (PointerInput::parse(tokenLowered, gesture)) {
+            // ArcadeMaster: touchTap, touchSwipeUp, touchDragDown, mouseWheelUp, mouseAxisX+, spinnerLeft, ...
+            keyHandlers_.push_back(std::pair<InputHandler*, KeyCode_E>(new GestureHandler(*pointer_, gesture), key));
+            LOG_INFO("Input", "Binding pointer gesture " + token + " to " + configKey);
+            found = true;
+        }
+        else if (tokenLowered.find("mouse") == 0) {
             std::string mousedesc = Utils::replace(Utils::toLower(token), "mouse", "");
             if (mousedesc.find("button") == 0) {
                 int button = 0;
@@ -449,6 +458,7 @@ bool UserInput::MapKeyCombo(const std::string& keyDescription, KeyCode_E key1, K
 
 void UserInput::resetStates()
 {
+    pointer_->reset();
     for (unsigned int i = 0; i < keyHandlers_.size(); ++i) {
         if (keyHandlers_[i].first) {
             keyHandlers_[i].first->reset();
@@ -460,6 +470,8 @@ void UserInput::resetStates()
 
 
 bool UserInput::update(SDL_Event& e) {
+    pointer_->feed(e);   // ArcadeMaster: gesture recogniser sees every event (touch, wheel, relative mouse)
+
     if (sdlGameController_) {
         // Handle adding a game controller
         if (e.type == SDL_CONTROLLERDEVICEADDED) {
@@ -629,6 +641,7 @@ void UserInput::updateKeystate() {
     // First, prepare the state for the new frame.
     memcpy(lastKeyState_, currentKeyState_, sizeof(lastKeyState_));
     memset(currentKeyState_, 0, sizeof(currentKeyState_));
+    pointer_->tick();   // ArcadeMaster: resolve this frame's gestures before handlers are polled
 
     // Now, poll all handlers to aggregate the final state for this frame.
     for (unsigned int i = 0; i < keyHandlers_.size(); ++i) {

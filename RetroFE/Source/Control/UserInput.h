@@ -18,8 +18,10 @@
 #include <SDL_joystick.h>
 #include <SDL_gamecontroller.h>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
+#include "PointerInput.h"
 
 const int cMaxJoy = 4;
 
@@ -125,6 +127,7 @@ private:
     SDL_JoystickID gameControllers_[cMaxJoy];
     bool sdlGameController_{ false };
     std::vector<std::pair<InputHandler *, KeyCode_E> > keyHandlers_;
+    std::unique_ptr<PointerInput> pointer_;   // ArcadeMaster: touch / wheel / trackball / spinner gestures
     bool lastKeyState_[KeyCodeMax]; 
     bool currentKeyState_[KeyCodeMax];
     Uint32 lastInputTime_[KeyCodeMax];
