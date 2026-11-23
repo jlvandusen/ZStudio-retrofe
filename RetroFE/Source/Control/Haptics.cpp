@@ -76,11 +76,16 @@ bool Haptics::open() {
         LOG_INFO("Haptics", "using the device's autocentre (" + std::to_string(center_) + "%) for the centring feel");
     }
     if ((caps_ & SDL_HAPTIC_DAMPER) && damper_ > 0) effDamper_ = makeCondition(SDL_HAPTIC_DAMPER, damper_);
+    // Menu "detent" ticks: ONE full sine period - a click felt in the hands with no net push. A one-way constant
+    // pulse per scroll stepped the wheel round (the weak centring spring could not undo it between presses), and
+    // with the on-screen wheel following the real one it visibly turned - the wrong way, too.
+    const Uint16 tickLen = static_cast<Uint16>(std::max(20, tickMs_));
+    if (caps_ & SDL_HAPTIC_SINE) { effTickFwd_ = effTickBack_ = makeSine(tick_, tickLen, tickLen, 0); }
     if (caps_ & SDL_HAPTIC_CONSTANT) {
-        effTickFwd_ = makeConstant(1, tick_, static_cast<Uint16>(tickMs_));
-        effTickBack_ = makeConstant(-1, tick_, static_cast<Uint16>(tickMs_));
+        if (effTickFwd_ < 0) { effTickFwd_ = makeConstant(1, tick_, tickLen); effTickBack_ = makeConstant(-1, tick_, tickLen); }
         effThunk_ = makeConstant(1, thunkPct_, 90);
     }
+
     if (caps_ & SDL_HAPTIC_SINE) {
         effSelect_ = makeSine(selectPct_, 40, 160, 60);
         effLaunch_ = makeSine(launchPct_, 28, 450, 250);
