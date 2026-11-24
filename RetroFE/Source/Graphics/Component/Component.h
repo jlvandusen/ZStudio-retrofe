@@ -84,6 +84,12 @@ public:
 	int liveIndex = 0;
 	float liveSteer = 0.f, liveFrom = 0.f, liveTo = 0.f;
 	std::string liveDevice;
+	//   liveNeedle="1"           the angle ALSO rises with that axis (a pedal): 0 at rest, +liveNeedleSpan fully pressed
+	//   liveNeedleSpan="270"     degrees at full travel (a 270-degree dial sweep)
+	//   liveNeedleSmooth="0.85"  0 = jumps with the pedal, 0.9 = lags like a real needle (per frame)
+	//   (uses liveFrom / liveTo as the pedal's rest / pressed values, like liveAxis)
+	int liveNeedle = -1;
+	float liveNeedleSpan = 270.f, liveNeedleSmooth = 0.f;
 	void liveBegin();
 	void liveEnd();
 	void setMenuScrollReload(bool menuScrollReload);
@@ -124,6 +130,7 @@ private:
     float        liveAngleBase_ = 0.f, liveAlphaBase_ = 1.f;
     bool         liveStarted_ = false;
     bool         liveAxisMoved_ = false;   // SDL reports 0 until a DirectInput axis first moves: dark until then
+    float        liveNeedleCur_ = 0.f;     // smoothed needle offset (degrees)
     unsigned int currentTweenIndex_;
     bool         currentTweenComplete_;
     double       elapsedTweenTime_;

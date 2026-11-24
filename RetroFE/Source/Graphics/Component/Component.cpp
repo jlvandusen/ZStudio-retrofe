@@ -15,6 +15,7 @@
  */
 #include "Component.h"
 #include <map>
+#include <cmath>
 #include "../Animate/Tween.h"
 #include "../../Graphics/ViewInfo.h"
 #include "../../Utility/Log.h"
@@ -459,13 +460,13 @@ static SDL_Joystick* liveJoystick(const std::string& want) {
 }
 
 void Component::liveBegin() {
-    if ((liveKind == LiveNone && liveSteer == 0.f) || !liveStarted_) return;
+    if ((liveKind == LiveNone && liveSteer == 0.f && liveNeedle < 0) || !liveStarted_) return;
     baseViewInfo.Angle = liveAngleBase_;                                    // undo last frame's live offset
     baseViewInfo.Alpha = liveAlphaBase_;
 }
 
 void Component::liveEnd() {
-    if (liveKind == LiveNone && liveSteer == 0.f) return;
+    if (liveKind == LiveNone && liveSteer == 0.f && liveNeedle < 0) return;
     liveAngleBase_ = baseViewInfo.Angle; liveAlphaBase_ = baseViewInfo.Alpha; liveStarted_ = true;
     SDL_Joystick* j = liveJoystick(liveDevice);
     if (liveSteer != 0.f) {
@@ -482,6 +483,24 @@ void Component::liveEnd() {
             if (it->second.second) v = std::max(-1.f, raw / 32767.f);
         }
         baseViewInfo.Angle = liveAngleBase_ + v * liveSteer;
+    }
+    if (liveNeedle >= 0) {
+        // a dial needle that rises with a pedal ("rev it in the menu"). Until that pedal sends its first report SDL
+        // holds a stale value (0 = half travel), so it counts as released until the reading first changes.
+        static std::map<std::pair<SDL_JoystickID, int>, std::pair<Sint16, bool>> pedalSeen;
+        float t = 0.f;
+        if (j && liveTo != liveFrom && liveNeedle < SDL_JoystickNumAxes(j)) {
+            const Sint16 raw = SDL_JoystickGetAxis(j, liveNeedle);
+            const auto key = std::make_pair(SDL_JoystickInstanceID(j), liveNeedle);
+            auto it = pedalSeen.find(key);
+            if (it == pedalSeen.end()) it = pedalSeen.emplace(key, std::make_pair(raw, false)).first;
+            if (raw != it->second.first) it->second.second = true;
+            if (it->second.second) t = std::min(1.f, std::max(0.f, (static_cast<float>(raw) - liveFrom) / (liveTo - liveFrom)));
+        }
+        const float target = t * liveNeedleSpan, k = std::min(0.99f, std::max(0.f, liveNeedleSmooth));
+        liveNeedleCur_ = liveNeedleCur_ * k + target * (1.f - k);
+        if (std::fabs(liveNeedleCur_ - target) < 0.05f) liveNeedleCur_ = target;
+        baseViewInfo.Angle += liveNeedleCur_;
     }
     switch (liveKind) {
     case LiveButton:
