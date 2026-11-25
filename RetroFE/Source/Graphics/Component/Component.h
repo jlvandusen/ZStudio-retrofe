@@ -90,6 +90,12 @@ public:
 	//   (uses liveFrom / liveTo as the pedal's rest / pressed values, like liveAxis)
 	int liveNeedle = -1;
 	float liveNeedleSpan = 270.f, liveNeedleSmooth = 0.f;
+	//   liveShiftX="60"          x moves with the wheel: +/- that many pixels at full lock (a backdrop panning into a turn)
+	//   liveZoomAxis="1" liveZoom="0.05" [liveZoomSmooth="0.85"]   the picture grows with a pedal (5% at full throttle)
+	//   liveCover="1"            grow just enough that a full-screen picture never shows its edges while it pans / tilts
+	float liveShiftX = 0.f, liveZoom = 0.f, liveZoomSmooth = 0.85f;
+	int liveZoomAxis = -1;
+	bool liveCover = false;
 	void liveBegin();
 	void liveEnd();
 	void setMenuScrollReload(bool menuScrollReload);
@@ -131,6 +137,10 @@ private:
     bool         liveStarted_ = false;
     bool         liveAxisMoved_ = false;   // SDL reports 0 until a DirectInput axis first moves: dark until then
     float        liveNeedleCur_ = 0.f;     // smoothed needle offset (degrees)
+    float        liveZoomCur_ = 0.f;       // smoothed pedal zoom (0 .. liveZoom)
+    float        liveXBase_ = 0.f, liveWBase_ = 0.f, liveHBase_ = 0.f;
+    bool         liveGeom() const { return liveShiftX != 0.f || liveZoomAxis >= 0 || liveCover; }
+    bool         liveAny() const { return liveKind != LiveNone || liveSteer != 0.f || liveNeedle >= 0 || liveGeom(); }
     unsigned int currentTweenIndex_;
     bool         currentTweenComplete_;
     double       elapsedTweenTime_;

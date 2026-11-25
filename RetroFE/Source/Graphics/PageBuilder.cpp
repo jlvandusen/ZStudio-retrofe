@@ -52,6 +52,10 @@ static void buildLive(rapidxml::xml_node<>* xml, Component* c) {
     auto num = [&](const char* name, float& out) { rapidxml::xml_attribute<>* a = xml->first_attribute(name); if (!a) return false; try { out = std::stof(a->value()); return true; } catch (...) { return false; } };
     float v = 0.f;
     if (num("liveSteer", v))       c->liveSteer = v;                   // can be combined with one of the next three
+    if (num("liveShiftX", v))      c->liveShiftX = v;
+    if (num("liveZoomAxis", v))    { c->liveZoomAxis = static_cast<int>(v); num("liveZoom", c->liveZoom); num("liveZoomSmooth", c->liveZoomSmooth);
+                                     if (!xml->first_attribute("liveFrom")) { c->liveFrom = 32767.f; c->liveTo = -32768.f; } num("liveFrom", c->liveFrom); num("liveTo", c->liveTo); }
+    if (num("liveCover", v))       c->liveCover = v != 0.f;
     if (num("liveNeedle", v))      { c->liveNeedle = static_cast<int>(v); c->liveFrom = 32767.f; c->liveTo = -32768.f; num("liveFrom", c->liveFrom); num("liveTo", c->liveTo);
                                      num("liveNeedleSpan", c->liveNeedleSpan); num("liveNeedleSmooth", c->liveNeedleSmooth); }
     if (num("liveButton", v)) { c->liveKind = Component::LiveButton; c->liveIndex = static_cast<int>(v); }

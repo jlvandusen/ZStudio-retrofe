@@ -459,48 +459,66 @@ static SDL_Joystick* liveJoystick(const std::string& want) {
     return want.empty() ? first : nullptr;
 }
 
+// Steering / pedal readings. Until a wheel or pedal sends its first report SDL holds a stale value (often full lock, or
+// half travel), so an axis counts as centred / released until its reading first changes. Remembered per joystick and
+// axis, so pages built later (after it has moved) follow it straight away.
+static bool liveAxisLive(SDL_Joystick* j, int axis, Sint16& raw) {
+    static std::map<std::pair<SDL_JoystickID, int>, std::pair<Sint16, bool>> seen;   // first reading, changed since
+    if (!j || axis < 0 || axis >= SDL_JoystickNumAxes(j)) return false;
+    raw = SDL_JoystickGetAxis(j, axis);
+    const auto key = std::make_pair(SDL_JoystickInstanceID(j), axis);
+    auto it = seen.find(key);
+    if (it == seen.end()) it = seen.emplace(key, std::make_pair(raw, false)).first;
+    if (raw != it->second.first) it->second.second = true;
+    return it->second.second;
+}
+static float liveSteerValue(SDL_Joystick* j) { Sint16 raw = 0; return liveAxisLive(j, 0, raw) ? std::max(-1.f, raw / 32767.f) : 0.f; }
+static float livePedalValue(SDL_Joystick* j, int axis, float from, float to) {
+    Sint16 raw = 0;
+    if (to == from || !liveAxisLive(j, axis, raw)) return 0.f;
+    return std::min(1.f, std::max(0.f, (static_cast<float>(raw) - from) / (to - from)));
+}
+
 void Component::liveBegin() {
-    if ((liveKind == LiveNone && liveSteer == 0.f && liveNeedle < 0) || !liveStarted_) return;
-    baseViewInfo.Angle = liveAngleBase_;                                    // undo last frame's live offset
+    if (!liveAny() || !liveStarted_) return;
+    baseViewInfo.Angle = liveAngleBase_;                                    // undo last frame's live offsets
     baseViewInfo.Alpha = liveAlphaBase_;
+    if (liveGeom()) { baseViewInfo.X = liveXBase_; baseViewInfo.Width = liveWBase_; baseViewInfo.Height = liveHBase_; }
 }
 
 void Component::liveEnd() {
-    if (liveKind == LiveNone && liveSteer == 0.f && liveNeedle < 0) return;
+    if (!liveAny()) return;
     liveAngleBase_ = baseViewInfo.Angle; liveAlphaBase_ = baseViewInfo.Alpha; liveStarted_ = true;
+    liveXBase_ = baseViewInfo.X; liveWBase_ = baseViewInfo.Width; liveHBase_ = baseViewInfo.Height;
     SDL_Joystick* j = liveJoystick(liveDevice);
-    if (liveSteer != 0.f) {
-        // Until a wheel sends its first report, SDL holds a stale value (often full lock): the picture started turned
-        // and only snapped upright once the wheel moved. Steering counts as centred until the reading first changes;
-        // remembered per joystick, so pages built later (after the wheel has moved) follow it straight away.
-        static std::map<SDL_JoystickID, std::pair<Sint16, bool>> steerSeen;   // first reading, has it changed since
-        float v = 0.f;
-        if (j) {
-            const Sint16 raw = SDL_JoystickGetAxis(j, 0);
-            auto it = steerSeen.find(SDL_JoystickInstanceID(j));
-            if (it == steerSeen.end()) it = steerSeen.emplace(SDL_JoystickInstanceID(j), std::make_pair(raw, false)).first;
-            if (raw != it->second.first) it->second.second = true;
-            if (it->second.second) v = std::max(-1.f, raw / 32767.f);
-        }
-        baseViewInfo.Angle = liveAngleBase_ + v * liveSteer;
-    }
+    const float steer = (liveSteer != 0.f || liveShiftX != 0.f) ? liveSteerValue(j) : 0.f;
+    if (liveSteer != 0.f) baseViewInfo.Angle = liveAngleBase_ + steer * liveSteer;
     if (liveNeedle >= 0) {
-        // a dial needle that rises with a pedal ("rev it in the menu"). Until that pedal sends its first report SDL
-        // holds a stale value (0 = half travel), so it counts as released until the reading first changes.
-        static std::map<std::pair<SDL_JoystickID, int>, std::pair<Sint16, bool>> pedalSeen;
-        float t = 0.f;
-        if (j && liveTo != liveFrom && liveNeedle < SDL_JoystickNumAxes(j)) {
-            const Sint16 raw = SDL_JoystickGetAxis(j, liveNeedle);
-            const auto key = std::make_pair(SDL_JoystickInstanceID(j), liveNeedle);
-            auto it = pedalSeen.find(key);
-            if (it == pedalSeen.end()) it = pedalSeen.emplace(key, std::make_pair(raw, false)).first;
-            if (raw != it->second.first) it->second.second = true;
-            if (it->second.second) t = std::min(1.f, std::max(0.f, (static_cast<float>(raw) - liveFrom) / (liveTo - liveFrom)));
-        }
-        const float target = t * liveNeedleSpan, k = std::min(0.99f, std::max(0.f, liveNeedleSmooth));
+        // a dial needle that rises with a pedal ("rev it in the menu")
+        const float target = livePedalValue(j, liveNeedle, liveFrom, liveTo) * liveNeedleSpan, k = std::min(0.99f, std::max(0.f, liveNeedleSmooth));
         liveNeedleCur_ = liveNeedleCur_ * k + target * (1.f - k);
         if (std::fabs(liveNeedleCur_ - target) < 0.05f) liveNeedleCur_ = target;
         baseViewInfo.Angle += liveNeedleCur_;
+    }
+    if (liveGeom() && liveWBase_ > 0.f && liveHBase_ > 0.f) {
+        // a backdrop that drives with you: pans with the wheel, grows with the throttle, and (liveCover) grows just
+        // enough to keep the screen covered while it is shifted or tilted
+        const float dx = steer * liveShiftX;
+        float zoom = 1.f;
+        if (liveZoomAxis >= 0) {
+            const float target = livePedalValue(j, liveZoomAxis, liveFrom, liveTo) * liveZoom, k = std::min(0.99f, std::max(0.f, liveZoomSmooth));
+            liveZoomCur_ = liveZoomCur_ * k + target * (1.f - k);
+            if (std::fabs(liveZoomCur_ - target) < 0.0005f) liveZoomCur_ = target;
+            zoom += liveZoomCur_;
+        }
+        if (liveCover) {
+            const float tilt = std::fabs(baseViewInfo.Angle - liveAngleBase_) * 3.14159265f / 180.f;
+            const float byShift = 1.f + 2.f * std::fabs(dx) / liveWBase_;
+            const float byTilt = std::cos(tilt) + (liveWBase_ / liveHBase_) * std::sin(tilt);
+            zoom *= std::max(byShift, byTilt);
+        }
+        baseViewInfo.X = liveXBase_ + dx;
+        baseViewInfo.Width = liveWBase_ * zoom; baseViewInfo.Height = liveHBase_ * zoom;
     }
     switch (liveKind) {
     case LiveButton:
