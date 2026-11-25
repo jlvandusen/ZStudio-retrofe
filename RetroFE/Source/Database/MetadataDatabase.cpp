@@ -35,6 +35,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <cctype>
 #include <cstring>
 
@@ -561,6 +562,34 @@ bool MetadataDatabase::initialize() {
             ss << "Unable to create Metadata table. Error: " << (error ? error : "(null)");
             LOG_ERROR("Metadata", ss.str());
             return false;
+        }
+
+        // ArcadeMaster: schema migration. CREATE TABLE IF NOT EXISTS never adds columns to an older meta.db (CoinOPS
+        // builds ship one without iscoredId / iscoredType), and then injectMetadata's SELECT fails for every
+        // collection - no year / maker / genre / players for any game. Add whatever this build's schema has and the
+        // file lacks, with the same defaults.
+        {
+            std::unordered_set<std::string> have;
+            sqlite3_stmt* info = nullptr;
+            if (sqlite3_prepare_v2(handle, "PRAGMA table_info(Meta);", -1, &info, nullptr) == SQLITE_OK) {
+                while (sqlite3_step(info) == SQLITE_ROW) {
+                    const unsigned char* col = sqlite3_column_text(info, 1);
+                    if (col) have.insert(Utils::toLower(reinterpret_cast<const char*>(col)));
+                }
+            }
+            sqlite3_finalize(info);
+            static const char* const wanted[] = { "collectionName", "name", "title", "year", "manufacturer", "developer", "genre",
+                "cloneOf", "players", "ctrltype", "buttons", "joyways", "rating", "iscoredId", "iscoredType", "score" };
+            for (const char* c : wanted) {
+                if (have.count(Utils::toLower(c))) continue;
+                std::string alter = std::string("ALTER TABLE Meta ADD COLUMN ") + c + " TEXT NOT NULL DEFAULT '';";
+                if (sqlite3_exec(handle, alter.c_str(), nullptr, nullptr, &error) == SQLITE_OK) {
+                    LOG_INFO("Metadata", std::string("meta.db upgraded: added column ") + c);
+                } else {
+                    LOG_ERROR("Metadata", std::string("meta.db upgrade failed for column ") + c + ": " + (error ? error : "(null)"));
+                    sqlite3_free(error); error = nullptr;
+                }
+            }
         }
     }
 
