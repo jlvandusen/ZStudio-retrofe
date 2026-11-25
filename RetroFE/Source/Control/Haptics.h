@@ -46,7 +46,7 @@ private:
 
     bool enabled_ = false;
     std::string deviceMatch_;
-    int strength_ = 75, center_ = 35, damper_ = 12, tick_ = 45, tickMs_ = 35, thunkPct_ = 60, selectPct_ = 55, launchPct_ = 85;
+    int strength_ = 75, center_ = 35, damper_ = 12, tick_ = 0 /* menu clicks off by default: on wheels they stepped the rim round (ffbTick = 45 to try) */, tickMs_ = 35, thunkPct_ = 60, selectPct_ = 55, launchPct_ = 85;
 
     SDL_Haptic* haptic_ = nullptr;
     unsigned int caps_ = 0;

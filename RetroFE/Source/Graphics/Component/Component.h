@@ -70,6 +70,34 @@ public:
 	virtual bool isPaused() { return false; };
 	ViewInfo baseViewInfo;
 	std::string collectionName;
+
+	// ArcadeMaster: live controller state drives a component (layout attributes, read in PageBuilder::buildViewInfo)
+	//   liveSteer="450"          the angle follows the wheel: full lock = +/-450 degrees (900-degree wheel); can be
+	//                            combined with one of the next three (a button glow that turns with the wheel)
+	//   liveButton="4"           shown only while joystick button 4 (0-based) is held
+	//   liveHat="1"              shown while the hat points that way (1 up, 2 right, 4 down, 8 left)
+	//   liveAxis="3" liveFrom="32767" liveTo="-32768"   shown in proportion to how far that axis has moved (pedals)
+	//   liveDevice="G29"         joystick name to follow (default: the first whose name has "wheel", else the first)
+	// Page calls liveBegin() before update() and liveEnd() after it, so animations keep working on the base values.
+	enum LiveKind { LiveNone, LiveButton, LiveHat, LiveAxis };
+	LiveKind liveKind = LiveNone;
+	int liveIndex = 0;
+	float liveSteer = 0.f, liveFrom = 0.f, liveTo = 0.f;
+	std::string liveDevice;
+	//   liveNeedle="1"           the angle ALSO rises with that axis (a pedal): 0 at rest, +liveNeedleSpan fully pressed
+	//   liveNeedleSpan="270"     degrees at full travel (a 270-degree dial sweep)
+	//   liveNeedleSmooth="0.85"  0 = jumps with the pedal, 0.9 = lags like a real needle (per frame)
+	//   (uses liveFrom / liveTo as the pedal's rest / pressed values, like liveAxis)
+	int liveNeedle = -1;
+	float liveNeedleSpan = 270.f, liveNeedleSmooth = 0.f;
+	//   liveShiftX="60"          x moves with the wheel: +/- that many pixels at full lock (a backdrop panning into a turn)
+	//   liveZoomAxis="1" liveZoom="0.05" [liveZoomSmooth="0.85"]   the picture grows with a pedal (5% at full throttle)
+	//   liveCover="1"            grow just enough that a full-screen picture never shows its edges while it pans / tilts
+	float liveShiftX = 0.f, liveZoom = 0.f, liveZoomSmooth = 0.85f;
+	int liveZoomAxis = -1;
+	bool liveCover = false;
+	void liveBegin();
+	void liveEnd();
 	void setMenuScrollReload(bool menuScrollReload);
 	bool getMenuScrollReload() const;
 	void setAnimationDoneRemove(bool value);
@@ -105,6 +133,14 @@ private:
     static std::map<int, SDL_Texture*> sharedBackgroundTextures_;
     bool         pauseOnScroll_;
     ViewInfo     storeViewInfo_;
+    float        liveAngleBase_ = 0.f, liveAlphaBase_ = 1.f;
+    bool         liveStarted_ = false;
+    bool         liveAxisMoved_ = false;   // SDL reports 0 until a DirectInput axis first moves: dark until then
+    float        liveNeedleCur_ = 0.f;     // smoothed needle offset (degrees)
+    float        liveZoomCur_ = 0.f;       // smoothed pedal zoom (0 .. liveZoom)
+    float        liveXBase_ = 0.f, liveWBase_ = 0.f, liveHBase_ = 0.f;
+    bool         liveGeom() const { return liveShiftX != 0.f || liveZoomAxis >= 0 || liveCover; }
+    bool         liveAny() const { return liveKind != LiveNone || liveSteer != 0.f || liveNeedle >= 0 || liveGeom(); }
     unsigned int currentTweenIndex_;
     bool         currentTweenComplete_;
     double       elapsedTweenTime_;
