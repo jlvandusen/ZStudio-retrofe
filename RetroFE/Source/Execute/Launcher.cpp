@@ -277,6 +277,28 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
             };
     }
 
+#ifdef WIN32
+    // ArcadeMaster: "which controller will you use?" - settings.conf arcadeMasterPanel = <path to AmPanel.exe>.
+    // AmPanel answers at once when this cabinet offers only one controller for the game; otherwise it shows a
+    // full-screen chooser (the last pick is taken by itself after a few seconds) and sets the sticks to match.
+    // Not in attract mode: nobody is there to answer. The frontend keeps drawing while it waits.
+    {
+        std::string amPanel;
+        config_.getProperty("arcadeMasterPanel", amPanel);
+        if (!amPanel.empty() && !isAttractMode && std::filesystem::exists(amPanel)) {
+            AllowSetForegroundWindow(ASFW_ANY);   // the chooser may take the keyboard from the full-screen frontend
+            auto chooser = std::make_unique<WindowsProcessManager>();
+            std::string chooseArgs = "choose \"" + collectionItem->name + "\" \"" + collection + "\"";
+            auto t0 = std::chrono::steady_clock::now();
+            if (chooser->launch(amPanel, chooseArgs, Utils::getDirectory(amPanel))) {
+                chooser->wait(30.0, nullptr, onFrameTick);
+                LOG_INFO("Launcher", "Controller question for " + collectionItem->name + ": " +
+                    std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count()) + " ms");
+            }
+        }
+    }
+#endif
+
     // --- PRE HOOK (supports prewait in ms or bool) ---
     {
         std::string preExe;
