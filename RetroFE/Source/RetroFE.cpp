@@ -145,6 +145,9 @@ RetroFE::~RetroFE() {
 	deInitialize();
 }
 
+// ArcadeMaster: hitch attribution - the last render()'s draw and present times (main thread only)
+static double g_amDrawMs = 0.0, g_amPresentMs = 0.0;
+
 void RetroFE::render() {
 	static double accumulatedRenderMs = 0.0;
 	static int framesSinceFpsUpdate = 0;
@@ -195,6 +198,8 @@ void RetroFE::render() {
 		}
 	}
 
+	const uint64_t amDrawEnd = SDL_GetPerformanceCounter();   // ArcadeMaster: hitch attribution
+	g_amDrawMs = (double)(amDrawEnd - r_startTicks) * 1000.0 / (double)freq_;
 	// --- 2. Blit to backbuffer & present ---
 	for (int i = 0; i < SDL::getScreenCount(); ++i) {
 		SDL_Renderer* rr = SDL::getRenderer(i);
@@ -208,6 +213,7 @@ void RetroFE::render() {
 
 	// --- 3. Timing for THIS render() call ---
 	const uint64_t r_endTicks = SDL_GetPerformanceCounter();
+	g_amPresentMs = (double)(r_endTicks - amDrawEnd) * 1000.0 / (double)freq_;   // ArcadeMaster
 	const double currentRenderDurationMs = (double)(r_endTicks - r_startTicks) * 1000.0 / (double)freq_;
 
 	// --- 4. FPS display logic ---
@@ -2990,8 +2996,22 @@ bool RetroFE::run() {
 				}
 			}
 
+			// ArcadeMaster: hitch attribution. A frame whose work (logic + draw + present, before pacing) takes over
+			// 33 ms is logged with where the time went and what was selected, so stutter has a cause, not a guess.
+			const uint64_t amLogicEnd = SDL_GetPerformanceCounter();
 			if (!currentPage_->getIsLaunched())
 				render();
+			if (g_perfLogSec > 0) {
+				const double amTotal = (double)(SDL_GetPerformanceCounter() - frameStartTicks) * 1000.0 / (double)freq_;
+				if (amTotal > 33.3) {
+					const double amLogic = (double)(amLogicEnd - frameStartTicks) * 1000.0 / (double)freq_;
+					Item* amSel = currentPage_ ? currentPage_->getSelectedItem() : nullptr;
+					char amBuf[320];
+					snprintf(amBuf, sizeof(amBuf), "hitch %.1f ms: logic %.1f  draw %.1f  present %.1f | state %d | item %s",
+						amTotal, amLogic, g_amDrawMs, g_amPresentMs, (int)state_, amSel ? amSel->name.c_str() : "-");
+					LOG_INFO("Perf", amBuf);
+				}
+			}
 
 			// Only do custom frame pacing if vsync is OFF
 			if (!vSync)
