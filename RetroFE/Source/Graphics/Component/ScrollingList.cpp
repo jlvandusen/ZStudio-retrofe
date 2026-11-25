@@ -37,6 +37,93 @@
 #include "../../SDL.h"
 #include "../ViewInfo.h"
 #include <math.h>
+#include <condition_variable>
+#include <filesystem>
+#include <fstream>
+#include <optional>
+#include <unordered_set>
+
+// ArcadeMaster (docs/14 item 4b): warm the art of the items around the selection.
+// The first scroll after a reboot hitched 116-359 ms: each new item's backdrop / logo / video was a cold disk read
+// (and the file lookups that find it) at the moment it came on screen. When the selection moves, one background thread
+// reads <collection>\medium_artwork\<type>\<item>.png|jpg|jpeg (whole) and .mp4 (first 4 MB) for the selected item and
+// the three either side, so those reads come from the Windows file cache when the item arrives. Only the newest request
+// is kept (a fast scroll never queues up), a file is read once per run, at most 96 MB per move.
+// settings.conf preloadNeighbours = false turns it off.
+namespace {
+namespace fs = std::filesystem;
+struct WarmJob { std::vector<std::string> roots; std::vector<std::string> names; };
+std::mutex g_warmMutex;
+std::condition_variable g_warmCv;
+std::optional<WarmJob> g_warmNext;
+bool g_warmStarted = false;
+
+void warmWorker() {
+    std::unordered_map<std::string, std::vector<fs::path>> dirs;   // medium_artwork root -> its type folders
+    std::unordered_set<std::string> done;                           // files already read this run
+    std::vector<char> buf(1 << 20);
+    for (;;) {
+        WarmJob job;
+        {
+            std::unique_lock<std::mutex> lock(g_warmMutex);
+            g_warmCv.wait(lock, [] { return g_warmNext.has_value(); });
+            job = std::move(*g_warmNext);
+            g_warmNext.reset();
+        }
+        size_t budget = size_t(96) << 20;
+        bool superseded = false;
+        for (const auto& name : job.names) {
+            for (const auto& root : job.roots) {
+                auto it = dirs.find(root);
+                if (it == dirs.end()) {
+                    std::vector<fs::path> subs; std::error_code ec;
+                    for (fs::directory_iterator d(root, ec), end; !ec && d != end; d.increment(ec))
+                        if (d->is_directory(ec)) subs.push_back(d->path());
+                    it = dirs.emplace(root, std::move(subs)).first;
+                }
+                for (const auto& sub : it->second) {
+                    for (const char* ext : { ".png", ".jpg", ".jpeg", ".mp4" }) {
+                        {
+                            std::lock_guard<std::mutex> lock(g_warmMutex);
+                            if (g_warmNext) { superseded = true; break; }   // the list moved again: warm the new place
+                        }
+                        fs::path p = sub / (name + ext);
+                        std::string key = p.string();
+                        if (done.count(key) || budget == 0) continue;
+                        std::error_code ec;
+                        if (!fs::is_regular_file(p, ec)) continue;
+                        size_t limit = (ext[1] == 'm') ? (size_t(4) << 20) : (size_t(64) << 20);
+                        std::ifstream f(p, std::ios::binary);
+                        size_t got = 0;
+                        while (f && got < limit && budget > 0) {
+                            f.read(buf.data(), (std::streamsize)buf.size());
+                            size_t n = (size_t)f.gcount();
+                            if (n == 0) break;
+                            got += n; budget = (n >= budget) ? 0 : budget - n;
+                        }
+                        if (done.size() > 50000) done.clear();
+                        done.insert(key);
+                        static size_t warmed = 0, bytes = 0;
+                        warmed++; bytes += got;
+                        if (warmed % 100 == 0)
+                            LOG_INFO("Preload", "warmed " + std::to_string(warmed) + " art files around the selection (" + std::to_string(bytes >> 20) + " MB read ahead)");
+                    }
+                    if (superseded) break;
+                }
+                if (superseded) break;
+            }
+            if (superseded) break;
+        }
+    }
+}
+
+void warmRequest(WarmJob job) {
+    std::lock_guard<std::mutex> lock(g_warmMutex);
+    if (!g_warmStarted) { std::thread(warmWorker).detach(); g_warmStarted = true; }
+    g_warmNext = std::move(job);
+    g_warmCv.notify_one();
+}
+} // namespace
 #if __has_include(<SDL_image.h>)
 #include <SDL_image.h>
 #elif __has_include(<SDL2_image/SDL_image.h>)
@@ -1007,6 +1094,29 @@ bool ScrollingList::update(float dt) {
 
     cachedIdle_ = allIdle;
     cachedAttractIdle_ = allAttractIdle;
+
+    // ArcadeMaster (4b): the selection moved - warm the art of it and its neighbours on the background thread
+    if (items_ && !items_->empty()) {
+        static int preload = -1;
+        if (preload < 0) { bool on = true; config_.getProperty("preloadNeighbours", on); preload = on ? 1 : 0; }
+        size_t sel = getSelectedIndex();
+        if (preload && sel != lastWarmIndex_) {
+            lastWarmIndex_ = sel;
+            const size_t n = items_->size();
+            WarmJob job;
+            for (int d : { 0, 1, -1, 2, -2, 3, -3 }) {
+                if ((size_t)std::abs(d) >= n) continue;
+                const Item* it = (*items_)[(sel + n + d) % n];
+                if (!it) continue;
+                job.names.push_back(it->name);
+                if (it->collectionInfo) {
+                    std::string root = Utils::combinePath(Configuration::absolutePath, "collections", it->collectionInfo->name, "medium_artwork");
+                    if (std::find(job.roots.begin(), job.roots.end(), root) == job.roots.end()) job.roots.push_back(root);
+                }
+            }
+            if (!job.names.empty() && !job.roots.empty()) warmRequest(std::move(job));
+        }
+    }
 
     // Notice: The movement logic is gone from here! It lives in Page.cpp now.
     return done;

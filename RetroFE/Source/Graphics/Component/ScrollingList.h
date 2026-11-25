@@ -240,6 +240,7 @@ private:
 
     size_t itemIndex_{ 0 };
     size_t selectedOffsetIndex_{ 0 };
+    size_t lastWarmIndex_{ static_cast<size_t>(-1) };   // ArcadeMaster: the selection the neighbours were warmed for
     struct TweenNeighbor {
         std::shared_ptr<AnimationEvents> tween;
         ViewInfo* cur;
