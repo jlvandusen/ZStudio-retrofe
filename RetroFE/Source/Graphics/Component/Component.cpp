@@ -472,7 +472,23 @@ static bool liveAxisLive(SDL_Joystick* j, int axis, Sint16& raw) {
     if (raw != it->second.first) it->second.second = true;
     return it->second.second;
 }
-static float liveSteerValue(SDL_Joystick* j) { Sint16 raw = 0; return liveAxisLive(j, 0, raw) ? std::max(-1.f, raw / 32767.f) : 0.f; }
+// Steering, measured from where the wheel RESTS, not from the axis' own zero. Held by the centring spring, a G29 (via
+// G HUB) settles a little off its axis zero (DESKTOP-RACE1: raw -1658, which drew the wheel 23 degrees to the left
+// while it stood straight). A reading that stays within 300 for 2 s and is near the middle (|raw| < 2500, about 34
+// degrees) is taken as "straight". Turning further, even holding still, never moves that point.
+static float liveSteerValue(SDL_Joystick* j) {
+    Sint16 raw = 0;
+    if (!liveAxisLive(j, 0, raw)) return 0.f;
+    struct Rest { int cand; Uint32 since; int rest; };
+    static std::map<SDL_JoystickID, Rest> rests;
+    const Uint32 now = SDL_GetTicks();
+    auto it = rests.find(SDL_JoystickInstanceID(j));
+    if (it == rests.end()) it = rests.emplace(SDL_JoystickInstanceID(j), Rest{ raw, now, 0 }).first;
+    Rest& r = it->second;
+    if (std::abs(raw - r.cand) > 300) { r.cand = raw; r.since = now; }
+    else if (now - r.since > 2000 && std::abs(r.cand) < 2500) r.rest = r.cand;
+    return std::min(1.f, std::max(-1.f, (raw - r.rest) / 32767.f));
+}
 static float livePedalValue(SDL_Joystick* j, int axis, float from, float to) {
     Sint16 raw = 0;
     if (to == from || !liveAxisLive(j, axis, raw)) return 0.f;
