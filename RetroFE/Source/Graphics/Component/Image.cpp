@@ -122,6 +122,18 @@ bool Image::startAsyncLoad(const std::string& path) {
 		}
 		else {
 			SDL_Surface* s = IMG_Load_RW(rw, 1);
+			// ArcadeMaster: convert to the layout the Direct3D 11 renderer takes (XRGB8888 for pictures without
+			// alpha, ARGB8888 with alpha - the same choice SDL_CreateTextureFromSurface makes) here on the loader
+			// thread. Otherwise that conversion ran on the main thread at upload time: ~4-6 ms per 1080p picture,
+			// several per menu move, which showed as stutter while scrolling.
+			if (s && s->format->format != SDL_PIXELFORMAT_ARGB8888 && s->format->format != SDL_PIXELFORMAT_RGB888 &&
+				!SDL_ISPIXELFORMAT_INDEXED(s->format->format)) {
+				bool hasAlpha = s->format->Amask != 0 || SDL_HasColorKey(s);
+				if (!SDL_HasColorKey(s)) {
+					SDL_Surface* conv = SDL_ConvertSurfaceFormat(s, hasAlpha ? SDL_PIXELFORMAT_ARGB8888 : SDL_PIXELFORMAT_RGB888, 0);
+					if (conv) { SDL_FreeSurface(s); s = conv; }
+				}
+			}
 			if (s) {
 				res.staticSurface = SharedSurface(s, SurfaceDeleter());
 				res.w = s->w; res.h = s->h;
