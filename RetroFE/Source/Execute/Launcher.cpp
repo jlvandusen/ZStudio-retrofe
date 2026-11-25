@@ -660,6 +660,54 @@ void Launcher::exitScript() {
 	}
 }
 
+#ifdef WIN32
+// ArcadeMaster: LEDBlinky (or AmPanel) is started on a worker thread, not on the render thread.
+// Fire-and-forget still ran CreateProcess on the main loop at every selection; on the pedestal that cost
+// 235-345 ms frames now and then (antivirus / disk on process start) - visible scroll stutter.
+// Selection events ("9") are coalesced: a newer one replaces any still queued, so a fast scroll starts
+// the helper once for where it stops, not once per item passed.
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+namespace {
+struct LedJob { std::string exe, args, dir; int command; };
+std::mutex g_ledMutex;
+std::condition_variable g_ledCv;
+std::deque<LedJob> g_ledQueue;
+bool g_ledWorkerStarted = false;
+
+void ledWorker() {
+	for (;;) {
+		LedJob job;
+		{
+			std::unique_lock<std::mutex> lock(g_ledMutex);
+			g_ledCv.wait(lock, [] { return !g_ledQueue.empty(); });
+			job = std::move(g_ledQueue.front());
+			g_ledQueue.pop_front();
+		}
+		std::unique_ptr<IProcessManager> pm = std::make_unique<WindowsProcessManager>();
+		if (!pm->simpleLaunch(job.exe, job.args, job.dir)) {
+			LOG_WARNING("LEDBlinky", "Failed to launch (no-wait mode).");
+		}
+	}
+}
+
+void ledEnqueue(LedJob job) {
+	std::lock_guard<std::mutex> lock(g_ledMutex);
+	if (!g_ledWorkerStarted) {
+		std::thread(ledWorker).detach();
+		g_ledWorkerStarted = true;
+	}
+	if (job.command == 9 || job.command == 8) {   // only the latest selection / list change matters
+		g_ledQueue.erase(std::remove_if(g_ledQueue.begin(), g_ledQueue.end(),
+			[&](const LedJob& j) { return j.command == job.command; }), g_ledQueue.end());
+	}
+	g_ledQueue.push_back(std::move(job));
+	g_ledCv.notify_one();
+}
+} // namespace
+#endif
+
 void Launcher::LEDBlinky(int command, std::string collection, Item* collectionItem) {
 	// This entire feature is Windows-specific. On other platforms, this function is a no-op.
 #ifdef WIN32
@@ -714,6 +762,10 @@ void Launcher::LEDBlinky(int command, std::string collection, Item* collectionIt
 	}
 
 	// --- Execution Logic ---
+	if (!wait) {
+		ledEnqueue(LedJob{ exe, args, LEDBlinkyDirectory, command });   // ArcadeMaster: off the render thread
+		return;
+	}
 	std::unique_ptr<IProcessManager> processManager = std::make_unique<WindowsProcessManager>();
 
 	if (wait) {
