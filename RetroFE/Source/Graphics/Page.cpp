@@ -743,6 +743,17 @@ void Page::selectRandom() {
 	invalidateIdleCache();
 }
 
+// ArcadeMaster: breadcrumbs
+std::function<std::string()> Page::breadcrumbProvider;
+
+std::vector<std::string> Page::collectionPath() {
+	std::vector<std::string> out;
+	for (const MenuInfo_S& m : collections_) {
+		if (m.collection && (out.empty() || out.back() != m.collection->name)) out.push_back(m.collection->name);
+	}
+	return out;
+}
+
 // ArcadeMaster (docs/22, touch panels): the shown panel per monitor; at start, the first panel the layout names there
 std::string Page::currentPanel(int monitor) {
 	auto it = currentPanel_.find(monitor);

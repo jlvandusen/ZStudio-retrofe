@@ -22,6 +22,8 @@
 #include "Control/Restrictor/RestrictorManager.h"
 #include "Control/Haptics.h"   // ArcadeMaster: frontend force feedback
 #include "Control/AmLink.h"    // ArcadeMaster: cabinet link
+#include <cctype>
+#include <stack>
 #include "Control/UserInput.h"
 #include "Database/Configuration.h"
 #include "Database/GlobalOpts.h"
@@ -835,7 +837,32 @@ static void perfSample(double frameMs, double targetMs, double nowMs) {
 }
 
 bool RetroFE::run() {
-#ifdef WIN32    
+	// ArcadeMaster: breadcrumbs (reloadableText type="am_breadcrumb") - every page on the stack, outermost first, then
+	// the current page's collections and its playlist: "MAIN > RACING > ALL GAMES"
+	Page::breadcrumbProvider = [this]() -> std::string {
+		std::vector<Page*> stack;
+		std::stack<Page*> copy = pages_;
+		while (!copy.empty()) { stack.push_back(copy.top()); copy.pop(); }
+		std::reverse(stack.begin(), stack.end());
+		if (currentPage_) stack.push_back(currentPage_);
+		std::vector<std::string> parts;
+		for (Page* p : stack) {
+			if (!p) continue;
+			for (const std::string& n : p->collectionPath()) if (parts.empty() || parts.back() != n) parts.push_back(n);
+		}
+		if (currentPage_) {
+			std::string pl = currentPage_->getPlaylistName();
+			if (pl == "all") pl = "All Games"; else if (pl == "favorites") pl = "Favorites"; else if (pl == "lastplayed") pl = "Last Played";
+			if (!pl.empty()) parts.push_back(pl);
+		}
+		std::string out;
+		for (const std::string& s : parts) {
+			if (!out.empty()) out += "  >  ";   // plain ASCII: the theme fonts have no arrow glyphs
+			for (char ch : s) out += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+		}
+		return out;
+	};
+#ifdef WIN32
 	bool highPriority = false;
 	config_.getProperty(OPTION_HIGHPRIORITY, highPriority);
 	if (highPriority) {

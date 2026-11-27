@@ -277,6 +277,10 @@ void ReloadableText::ReloadTexture() {
     {
         text = page.getCollectionName();
     }
+    else if (type_ == "am_breadcrumb")   // ArcadeMaster: the path - MAIN > RACING > ALL GAMES (Page::breadcrumbProvider)
+    {
+        text = Page::breadcrumbProvider ? Page::breadcrumbProvider() : page.getCollectionName();
+    }
     else if (type_ == "collectionSize")
     {
         const size_t size = page.getCollectionSize();
