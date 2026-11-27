@@ -1206,10 +1206,20 @@ bool RetroFE::run() {
 				const int lw = currentPage_->getLayoutWidthByMonitor(m), lh = currentPage_->getLayoutHeightByMonitor(m);
 				if (lw > 0 && lh > 0) {
 					const std::string action = currentPage_->touchActionAt(m, tapX * lw, tapY * lh);
+					int offset = 0;
 					if (!action.empty()) {
 						input_.pointer().suppressTap();
 						if (input_.pulseAction(action)) LOG_INFO("Touch", "button '" + action + "' on screen " + std::to_string(m));
 						else LOG_WARNING("Touch", "button action '" + action + "' is not a controls.conf action");
+					}
+					// touch the list: the selected game starts (Select), another visible game is jumped to - only while the
+					// menu stands still, like the cabinet link's goto
+					else if (state_ == RETROFE_IDLE && !menuMode_ && !currentPage_->isMenuScrolling() &&
+					         currentPage_->touchListAt(m, tapX * lw, tapY * lh, offset)) {
+						input_.pointer().suppressTap();
+						attract_.reset();
+						if (offset == 0) { input_.pulseAction("select"); LOG_INFO("Touch", "list: the selected item, on screen " + std::to_string(m)); }
+						else { currentPage_->selectByOffset(offset); setState(RETROFE_MENUJUMP_REQUEST); LOG_INFO("Touch", "list: jump " + std::to_string(offset) + " on screen " + std::to_string(m)); }
 					}
 				}
 			}

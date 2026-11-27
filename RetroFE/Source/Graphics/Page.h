@@ -94,6 +94,10 @@ public:
     // ArcadeMaster: the touchAction of the topmost visible touch button on `monitor` under (x, y) in that monitor's
     // layout pixels, or "" - its onTouch animation is played
     std::string touchActionAt(int monitor, float x, float y);
+    // ArcadeMaster (touch the list): the active list's item under (x, y) as an offset from the selected item
+    bool touchListAt(int monitor, float x, float y, int& offset);
+    // ArcadeMaster: move the selection by `offset` items at once (a jump, like selectRandom)
+    void selectByOffset(int offset);
     int getLayoutWidthByMonitor(int monitor);
     int getLayoutHeightByMonitor(int monitor);
     void setLayoutWidthByMonitor(int monitor, int width);

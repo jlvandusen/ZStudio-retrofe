@@ -1031,6 +1031,25 @@ bool ScrollingList::update(float dt) {
     return done;
 }
 
+bool ScrollingList::touchOffsetAt(int monitor, float x, float y, int& offset)
+{
+    if (!items_ || items_->empty()) return false;
+    bool found = false; unsigned int bestLayer = 0; int bestDist = 0;
+    for (size_t i = 0; i < components_.size(); ++i) {
+        Component* c = components_[i];
+        if (!c) continue;
+        const ViewInfo& v = c->baseViewInfo;
+        if (v.Monitor != monitor || v.Alpha < 0.05f) continue;
+        const float x0 = v.XRelativeToOrigin(), y0 = v.YRelativeToOrigin();
+        if (x < x0 || x > x0 + v.ScaledWidth() || y < y0 || y > y0 + v.ScaledHeight()) continue;
+        const int off = static_cast<int>(i) - static_cast<int>(selectedOffsetIndex_);
+        const int dist = off < 0 ? -off : off;
+        // overlapping items: the one drawn on top (higher layer), then the one nearest the selection
+        if (!found || v.Layer > bestLayer || (v.Layer == bestLayer && dist < bestDist)) { found = true; bestLayer = v.Layer; bestDist = dist; offset = off; }
+    }
+    return found;
+}
+
 size_t ScrollingList::getSelectedIndex( ) const
 {
     if ( !items_ ) return 0;
