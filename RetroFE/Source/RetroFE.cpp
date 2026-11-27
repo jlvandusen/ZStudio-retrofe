@@ -1260,7 +1260,13 @@ bool RetroFE::run() {
 				if (lw > 0 && lh > 0) {
 					const std::string action = currentPage_->touchActionAt(m, tapX * lw, tapY * lh);
 					int offset = 0;
-					if (!action.empty() && action.compare(0, 6, "panel:") == 0) {
+					if (!action.empty() && action.compare(0, 3, "am:") == 0) {
+						// a request for AmPanel (docs/22): touchAction="am:search" opens its search screen
+						input_.pointer().suppressTap();
+						if (AmLink::instance().enabled()) { AmLink::instance().send("request\t" + action.substr(3)); LOG_INFO("Touch", "request '" + action.substr(3) + "' sent to AmPanel"); }
+						else LOG_WARNING("Touch", "'" + action + "' needs the cabinet link (settings.conf amLink)");
+					}
+					else if (!action.empty() && action.compare(0, 6, "panel:") == 0) {
 						// touch panels (docs/22): switch the panel shown on this screen
 						input_.pointer().suppressTap();
 						if (currentPage_->showPanel(m, action.substr(6))) LOG_INFO("Touch", "panel '" + action.substr(6) + "' on screen " + std::to_string(m));
