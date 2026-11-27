@@ -4110,9 +4110,15 @@ CollectionInfo* RetroFE::getCollection(const std::string& collectionName) {
 	config_.getProperty(OPTION_SUBSSPLIT, subsSplit);
 
 	CollectionInfoBuilder cib(config_, *metadb_);
+	// ArcadeMaster (docs/14 item 5): with perfLog on, where reading a collection goes (build / metadata / subs / sort)
+	const double amF = static_cast<double>(SDL_GetPerformanceFrequency()) / 1000.0;
+	Uint64 amC0 = SDL_GetPerformanceCounter(); double amBuild = 0, amMeta = 0, amSort = 0; int amSubs = 0;
+	auto amLap = [&](double& acc) { Uint64 n = SDL_GetPerformanceCounter(); acc += (n - amC0) / amF; amC0 = n; };
 	CollectionInfo* collection = cib.buildCollection(collectionName);
+	amLap(amBuild);
 	collection->subsSplit = subsSplit;
 	cib.injectMetadata(collection);
+	amLap(amMeta);
 
 	fs::path path = Utils::combinePath(Configuration::absolutePath, "collections", collectionName);
 	if (!fs::exists(path) || !fs::is_directory(path)) {
@@ -4127,10 +4133,13 @@ CollectionInfo* RetroFE::getCollection(const std::string& collectionName) {
 
 			LOG_INFO("RetroFE", "Loading subcollection into menu: " + basename);
 
+			amLap(amSort);   // (directory walk between subs counted with sort)
 			CollectionInfo* subcollection = cib.buildCollection(basename, collectionName);
+			amLap(amBuild); ++amSubs;
 			collection->addSubcollection(subcollection);
 			subcollection->subsSplit = subsSplit;
 			cib.injectMetadata(subcollection);
+			amLap(amMeta);
 			collection->hasSubs = true;
 		}
 	}
@@ -4147,6 +4156,8 @@ CollectionInfo* RetroFE::getCollection(const std::string& collectionName) {
 		}
 		collection->sortItems();
 	}
+	amLap(amSort);
+	if (g_perfLogSec > 0) { char b[256]; snprintf(b, sizeof(b), "collection %s: build %.1f ms (%d subs), metadata %.1f ms, sort/walk %.1f ms", collectionName.c_str(), amBuild, amSubs, amMeta, amSort); LOG_INFO("Perf", b); }
 
 	MenuParser mp;
 	bool menuFromCollectionLaunchers = false;
