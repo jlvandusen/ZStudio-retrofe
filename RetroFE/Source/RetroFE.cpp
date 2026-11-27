@@ -728,6 +728,7 @@ void RetroFE::waitForAsyncAssets() {
 //        miss   <item>                                                  a goto for a game this menu does not have
 //   in   goto <item> [<collection>]     jump to that game (the "random game" path, to a named game)
 //        open                           what the Select button does: start the game / enter the menu
+//        back                           what the Back button does inside a menu (never quits the frontend)
 // ---------------------------------------------------------------------------
 void RetroFE::linkPoll() {
 	AmLink& link = AmLink::instance();
@@ -773,6 +774,15 @@ void RetroFE::linkPoll() {
 				setState(RETROFE_MENUJUMP_REQUEST);
 			}
 			else link.send("miss\t" + p[1]);
+			break;
+		}
+		if (p[0] == "back") {                                  // what the Back button does inside a menu; never quits the frontend
+			bool wouldQuit = false;
+			if (back(wouldQuit) && !wouldQuit) {
+				linkRemote_ = true;
+				attract_.reset();
+				setState(RETROFE_BACK_REQUEST);
+			}
 			break;
 		}
 		if (p[0] == "open" && sel) {

@@ -93,6 +93,15 @@ bool Haptics::open() {
     run(effSpring_); run(effDamper_);
     LOG_INFO("Haptics", std::string("force feedback on '") + SDL_HapticName(pick) + "': spring=" + std::to_string(effSpring_ >= 0) +
              " damper=" + std::to_string(effDamper_ >= 0) + " ticks=" + std::to_string(effTickFwd_ >= 0) + " rumble=" + std::to_string(effSelect_ >= 0));
+    // ArcadeMaster: right after a game the wheel can be opened but refuses every effect ("Unable to create effect"): the
+    // game that just closed, or the wheel's own software, still has it for a moment. That left the menus with no force
+    // until the next game (RACE1, 2026-11-27: spring=0 damper=0 ticks=0 rumble=0 after every game). An open that got
+    // no effect at all is not an open: let go, and pump() tries again shortly.
+    if (effSpring_ < 0 && effDamper_ < 0 && effTickFwd_ < 0 && effSelect_ < 0 && (caps_ & (SDL_HAPTIC_SPRING | SDL_HAPTIC_SINE | SDL_HAPTIC_CONSTANT))) {
+        LOG_WARNING("Haptics", "the wheel refused every effect - letting go and trying again shortly");
+        close();
+        return false;
+    }
     return true;
 }
 
@@ -141,7 +150,18 @@ int Haptics::makeSine(int magnitudePct, Uint16 periodMs, Uint16 ms, Uint16 fadeM
 }
 
 void Haptics::pump() {
-    if (!haptic_) { tickFwd_ = tickBack_ = thunk_ = select_ = false; return; }
+    if (!haptic_) {
+        tickFwd_ = tickBack_ = thunk_ = select_ = false;
+        // ArcadeMaster: an open can fail when another program has the wheel for a moment: at start-up (a boot-time
+        // controller check) and right after a game. On DESKTOP-RACE1 that left the menus with no force at all.
+        // Try again every 5 s, at most 24 times (2 minutes) so a cabinet without a wheel does not fill the log; every
+        // game exit tries again anyway (reacquire).
+        if (enabled_ && openRetries_ < 24) {
+            const Uint32 t = SDL_GetTicks();
+            if (t - lastOpenTryMs_ >= 5000) { lastOpenTryMs_ = t; ++openRetries_; if (open()) { openRetries_ = 0; LOG_WARNING("Haptics", "force-feedback device opened on a later try - menu force is on"); } }
+        }
+        return;
+    }
     const Uint32 now = SDL_GetTicks();
     if (thunk_.exchange(false)) run(effThunk_);
     if (select_.exchange(false)) run(effSelect_);
@@ -162,6 +182,7 @@ void Haptics::launchPulseAndRelease() {
 
 void Haptics::reacquire() {
     if (!enabled_ || haptic_) return;
+    openRetries_ = 0; lastOpenTryMs_ = SDL_GetTicks();   // ArcadeMaster: after every game the retries start afresh (pump(), every 5 s)
     if (open()) LOG_INFO("Haptics", "force-feedback device re-acquired");
 }
 
