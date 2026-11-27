@@ -184,8 +184,19 @@ void GameHandOff::minimiseEmulatorConsoles() {
         if (self->consolesDone_.count(h) || !IsWindowVisible(h) || IsIconic(h)) return TRUE;
         DWORD pid = 0; GetWindowThreadProcessId(h, &pid);
         std::wstring name = processName(pid);
+        // TeknoParrot's own "Game Running" window: it sat alone on a black screen in front of the frontend's launch
+        // screen while Arctic Thunder took 25 s to open its window (RACE2, 2026-11-27). Esc / the exit guard end the
+        // game, not its Force Quit button.
+        // Only that window: TeknoParrot's dialogs (policies, errors) must stay where the player sees them.
+        wchar_t tt[128] = {}; int tn = iequals(name, L"TeknoParrotUi") ? InternalGetWindowText(h, tt, 128) : 0;   // reads the title without asking the window
+        if (tn > 0 && _wcsicmp(tt, L"Game Running") == 0) {
+            ShowWindowAsync(h, SW_MINIMIZE);
+            self->consolesDone_.insert(h);
+            LOG_INFO("GameHandOff", "TeknoParrot's status window minimised");
+            return TRUE;
+        }
         if (!iequals(name, L"WindowsTerminal") && !iequals(name, L"OpenConsole")) return TRUE;
-        wchar_t t[512]; int n = GetWindowTextW(h, t, 512);
+        wchar_t t[512]; int n = InternalGetWindowText(h, t, 512);
         std::wstring title(t, n > 0 ? n : 0), low = title;
         std::transform(low.begin(), low.end(), low.begin(), ::towlower);
         // only an emulator's console (its path or RetroBat in the title): never somebody's own terminal
