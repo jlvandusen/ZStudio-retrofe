@@ -45,6 +45,7 @@ private:
     void run(int id) { if (haptic_ && id >= 0) SDL_HapticRunEffect(haptic_, id, 1); }
 
     bool enabled_ = false;
+    int openRetries_ = 0; Uint32 lastOpenTryMs_ = 0;   // ArcadeMaster: pump() keeps trying to open the device
     std::string deviceMatch_;
     int strength_ = 75, center_ = 35, damper_ = 12, tick_ = 0 /* menu clicks off by default: on wheels they stepped the rim round (ffbTick = 45 to try) */, tickMs_ = 35, thunkPct_ = 60, selectPct_ = 55, launchPct_ = 85;
 
