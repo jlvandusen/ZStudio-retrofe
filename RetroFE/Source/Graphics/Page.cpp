@@ -29,6 +29,7 @@
 #include "../Utility/Utils.h"
 #include "../Database/GlobalOpts.h"
 #include <algorithm>
+#include <typeinfo>
 #include <sstream>
 
 
@@ -1651,11 +1652,20 @@ void Page::draw(int monitor) {
 	}
 }
 
+bool Page::perfDetail = false;
+
 void Page::pumpGraphicsPreparation() {
+	std::vector<std::pair<double, std::string>> slow;   // ArcadeMaster: perfDetail timing
+	const double perfF = static_cast<double>(SDL_GetPerformanceFrequency()) / 1000.0;
 	for (const auto& layerComponents : LayerComponents_) {
 		for (Component* component : layerComponents) {
 			if (component) {
+				const Uint64 c0 = perfDetail ? SDL_GetPerformanceCounter() : 0;
 				component->pumpGraphicsPreparation();
+				if (perfDetail) {
+					const double ms = (SDL_GetPerformanceCounter() - c0) / perfF;
+					if (ms >= 1.0) { std::string what = typeid(*component).name(); std::string_view fp = component->filePath(); if (!fp.empty()) { what += " "; what += std::string(fp.substr(fp.find_last_of("/\\") == std::string_view::npos ? 0 : fp.find_last_of("/\\") + 1)); } slow.emplace_back(ms, what); }
+				}
 			}
 		}
 	}
@@ -1670,6 +1680,11 @@ void Page::pumpGraphicsPreparation() {
 			}
 		}
 		++currentDepth;
+	}
+	if (perfDetail) {
+		std::sort(slow.begin(), slow.end(), [](auto& a, auto& b) { return a.first > b.first; });
+		perfSlowest.clear(); char b[64];
+		for (size_t i = 0; i < slow.size() && i < 3; ++i) { snprintf(b, sizeof(b), "%.1f ms ", slow[i].first); perfSlowest += (i ? "; " : "") + std::string(b) + slow[i].second; }
 	}
 }
 

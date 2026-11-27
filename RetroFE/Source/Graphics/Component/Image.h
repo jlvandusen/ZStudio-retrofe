@@ -31,6 +31,11 @@ public:
     std::string_view filePath();
 
     static void cleanupTextureCache();
+    // ArcadeMaster (docs/14 item 5): how much main-thread time per frame may go into turning decoded pictures into
+    // textures (settings.conf textureUploadBudgetMs, 0 = no limit). A picture over the budget finishes on a later frame.
+    static void beginFrameUploads(double budgetMs);
+    static double uploadBudgetMs_;
+    static double uploadSpentMs_;
 
     bool recycleAsImage(const std::string& newFilePath, const std::string& newAltPath = "") override;
 
@@ -79,6 +84,7 @@ private:
     // Internal Logic
     bool startAsyncLoad(const std::string& path);
     void finalizeLoad();
+    bool tryFinalizeLoad();   // finalizeLoad within the frame's upload budget
     bool loadFromCache(const std::string& filePath);
 
     void resetAnimationState();
