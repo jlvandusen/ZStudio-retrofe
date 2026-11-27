@@ -1860,6 +1860,7 @@ bool RetroFE::run() {
 			if (currentPage_ && pageIdle())
 			{
 				currentPage_->onNewItemSelected();
+				currentPage_->onNewScrollItemSelected();   // ArcadeMaster: title / text / counter follow a jump too
 				currentPage_->reallocateMenuSpritePoints(false); // skip updating playlist menu
 				preparePageForFirstRender(currentPage_);
 				currentPage_->menuJumpEnter();
@@ -3164,6 +3165,23 @@ bool RetroFE::run() {
 
 				Image::beginFrameUploads(g_uploadBudgetMs);   // ArcadeMaster: this frame's texture upload budget
 				currentPage_->update(animationDt);
+
+				// ArcadeMaster: the per-game pictures follow the selection, whatever moved it. A scroll by hand ends in the
+				// highlight steps, which load them. Attract mode scrolls the list from outside the state machine and never
+				// asked for those steps: the title and text moved on, the controls card and backdrop of an earlier game
+				// stayed (James, RACE1 2026-11-27: Dead Heat with the Nicktoons card). When the list has stood still on a
+				// game other than the one the pictures were loaded for, for a third of a second, the highlight steps run.
+				{
+					static Uint32 amOffSince = 0; static Item* amAsked = nullptr;   // amAsked: asked once per game, so a path that never
+					                                                                 // reports its pictures cannot make this repeat
+					Item* amNow = (state_ == RETROFE_IDLE && !menuMode_ && !splashMode && currentPage_->isMenuIdle()) ? currentPage_->getSelectedMenuItem() : nullptr;
+					if (amNow && amNow->leaf && amNow != currentPage_->artItem() && amNow != amAsked) {
+						const Uint32 t = SDL_GetTicks() | 1u;   // | 1: never 0, which means "not waiting"
+						if (amOffSince == 0) amOffSince = t;
+						else if (t - amOffSince >= 330) { amOffSince = 0; amAsked = amNow; setState(RETROFE_HIGHLIGHT_REQUEST); }
+					}
+					else { amOffSince = 0; if (amNow && amNow == currentPage_->artItem()) amAsked = nullptr; }
+				}
 
 				if (!splashMode && !paused_)
 				{

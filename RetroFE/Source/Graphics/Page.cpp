@@ -178,6 +178,7 @@ void Page::setActiveMenuItemsFromPlaylist(MenuInfo_S info, ScrollingList* menu) 
 
 void Page::onNewItemSelected() {
 	if (!getAnActiveMenu()) return;
+	artItem_ = getSelectedMenuItem();   // ArcadeMaster: the pictures now belong to this game
 
 	for (auto it = menus_.begin(); it != menus_.end(); ++it) {
 		for (auto it2 = it->begin(); it2 != it->end(); ++it2) {
@@ -276,6 +277,7 @@ void Page::highlightLoadArt() {
 
 	// loading new items art
 	setSelectedItem();
+	artItem_ = getSelectedMenuItem();   // ArcadeMaster: the pictures now belong to this game
 
 	for (auto& layer : LayerComponents_) {
 		for (Component* component : layer) {
