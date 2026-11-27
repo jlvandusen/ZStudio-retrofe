@@ -2326,3 +2326,21 @@ void Page::setIsLaunched(bool isLaunched) {
 bool Page::getIsLaunched() const {
 	return isLaunched_;
 }
+
+// ArcadeMaster: touch buttons - hit-test the components that carry touchAction (docs/22-touch-surface.md)
+std::string Page::touchActionAt(int monitor, float x, float y) {
+	for (auto it = LayerComponents_.rbegin(); it != LayerComponents_.rend(); ++it) {
+		for (auto c = it->rbegin(); c != it->rend(); ++c) {
+			Component* comp = *c;
+			if (!comp || comp->touchAction.empty()) continue;
+			const ViewInfo& v = comp->baseViewInfo;
+			if (v.Monitor != monitor || v.Alpha < 0.05f) continue;
+			const float x0 = v.XRelativeToOrigin(), y0 = v.YRelativeToOrigin();
+			if (x >= x0 && x <= x0 + v.ScaledWidth() && y >= y0 && y <= y0 + v.ScaledHeight()) {
+				comp->triggerEvent("touch");
+				return comp->touchAction;
+			}
+		}
+	}
+	return "";
+}

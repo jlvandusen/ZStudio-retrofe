@@ -104,10 +104,24 @@ void PointerInput::reset() {
     for (auto& a : active_) a.fill(false);
     for (auto& p : pulseUntil_) p.fill(0);
     lastRegionTap_.fill(LastTap{});
+    pendingTap_ = PendingTap{};
     fingers_.clear();
     maxFingersThisTouch_ = 0;
     longPressFired_ = false;
     axisAccX_ = axisAccY_ = 0.f;
+}
+
+bool PointerInput::takeTap(int& screen, float& x, float& y) {
+    if (!pendingTap_.valid) return false;
+    screen = pendingTap_.slot - 1; x = pendingTap_.x; y = pendingTap_.y;
+    pendingTap_.valid = false;
+    return true;
+}
+
+void PointerInput::suppressTap() {
+    // the tap was a layout button's: no Tap / zone / double-tap pulse and no region tap for it, on any screen
+    for (auto& p : pulseUntil_) for (Gesture g : { Tap, DoubleTap, TapLeft, TapRight, TapTop, TapBottom, TapCenter }) p[g] = 0;
+    lastRegionTap_.fill(LastTap{});
 }
 
 bool PointerInput::tapInRegion(int screen, int col, int cols, int row, int rows) const {
@@ -160,6 +174,7 @@ void PointerInput::feed(const SDL_Event& e) {
         if (!f.moved && dt <= tapMaxMs_) {
             pulse(Tap, now, s);
             for (int slot : { 0, s }) { lastRegionTap_[slot].until = now + pulseMs_; lastRegionTap_[slot].x = f.x0; lastRegionTap_[slot].y = f.y0; }
+            pendingTap_ = PendingTap{ true, s, f.x0, f.y0 };               // for layout touch buttons (takeTap)
             if (f.x0 < 1.f / 3) pulse(TapLeft, now, s); else if (f.x0 > 2.f / 3) pulse(TapRight, now, s);
             if (f.y0 < 1.f / 3) pulse(TapTop, now, s);  else if (f.y0 > 2.f / 3) pulse(TapBottom, now, s);
             if (f.x0 >= 1.f / 3 && f.x0 <= 2.f / 3 && f.y0 >= 1.f / 3 && f.y0 <= 2.f / 3) pulse(TapCenter, now, s);

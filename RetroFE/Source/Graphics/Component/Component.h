@@ -84,6 +84,12 @@ public:
 	int liveIndex = 0;
 	float liveSteer = 0.f, liveFrom = 0.f, liveTo = 0.f;
 	std::string liveDevice;
+	// ArcadeMaster: touch buttons (docs/22-touch-surface.md). touchAction="select" makes the component a button: a tap
+	// inside its drawn rectangle, on its screen, fires that controls.conf action (select, back, up, down, random,
+	// nextPlaylist, favPlaylist, letterUp, settings, ...) for one pulse, exactly like the key. The topmost visible
+	// touch component under the finger wins, and the tap is then not also seen by touch gestures / region taps.
+	// onTouch plays on the button that was hit (press feedback).
+	std::string touchAction;
 	//   liveNeedle="1"           the angle ALSO rises with that axis (a pedal): 0 at rest, +liveNeedleSpan fully pressed
 	//   liveNeedleSpan="270"     degrees at full travel (a 270-degree dial sweep)
 	//   liveNeedleSmooth="0.85"  0 = jumps with the pedal, 0.9 = lags like a real needle (per frame)

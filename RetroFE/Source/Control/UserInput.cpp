@@ -165,6 +165,8 @@ bool UserInput::MapKey(const std::string& keyDescription, KeyCode_E key)
 bool UserInput::MapKey(const std::string& keyDescription, KeyCode_E key, bool required)
 {
     std::string description;
+    if (actionCodes_.find(Utils::toLower(keyDescription)) == actionCodes_.end())
+        actionCodes_[Utils::toLower(keyDescription)] = key;   // ArcadeMaster: touch buttons fire actions by name (first mapping wins)
 
     std::string configKey = "controls." + keyDescription;
 
@@ -648,6 +650,13 @@ void UserInput::reconfigure()
 }
 
 
+bool UserInput::pulseAction(const std::string& name) {
+    auto it = actionCodes_.find(Utils::toLower(name));
+    if (it == actionCodes_.end()) return false;
+    actionPulseUntil_[it->second] = SDL_GetTicks() + 90;   // like a touch gesture's key tap (PointerInput pulseMs)
+    return true;
+}
+
 void UserInput::updateKeystate() {
     // First, prepare the state for the new frame.
     memcpy(lastKeyState_, currentKeyState_, sizeof(lastKeyState_));
@@ -663,6 +672,7 @@ void UserInput::updateKeystate() {
         }
     }
     Uint32 now = SDL_GetTicks();
+    for (unsigned int i = 0; i < KeyCodeMax; ++i) if (now < actionPulseUntil_[i]) currentKeyState_[i] = true;   // ArcadeMaster: touch buttons
     for (unsigned int i = 0; i < KeyCodeMax; ++i) {
         // Is this a NEW press? (Hardware says true, but last frame was false)
         if (currentKeyState_[i] && !lastKeyState_[i]) {

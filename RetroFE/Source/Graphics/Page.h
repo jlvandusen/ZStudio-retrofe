@@ -91,6 +91,9 @@ public:
     void stop();
     void setCurrentLayout(int layout);
     int getCurrentLayout() const;
+    // ArcadeMaster: the touchAction of the topmost visible touch button on `monitor` under (x, y) in that monitor's
+    // layout pixels, or "" - its onTouch animation is played
+    std::string touchActionAt(int monitor, float x, float y);
     int getLayoutWidthByMonitor(int monitor);
     int getLayoutHeightByMonitor(int monitor);
     void setLayoutWidthByMonitor(int monitor, int width);

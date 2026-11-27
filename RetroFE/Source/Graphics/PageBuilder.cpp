@@ -63,6 +63,7 @@ static void buildLive(rapidxml::xml_node<>* xml, Component* c) {
     else if (num("liveAxis", v))   { c->liveKind = Component::LiveAxis;   c->liveIndex = static_cast<int>(v);
                                      c->liveFrom = 32767.f; c->liveTo = -32768.f; num("liveFrom", c->liveFrom); num("liveTo", c->liveTo); }
     if (rapidxml::xml_attribute<>* d = xml->first_attribute("liveDevice")) c->liveDevice = d->value();
+    if (rapidxml::xml_attribute<>* t = xml->first_attribute("touchAction")) c->touchAction = t->value();   // ArcadeMaster: touch buttons
 }
 using namespace rapidxml;
 
@@ -1040,6 +1041,7 @@ std::shared_ptr<AnimationEvents> PageBuilder::createTweenInstance(rapidxml::xml_
     }
 
 	buildTweenSet(tweens.get(), componentXml, "onEnter", "enter");
+	buildTweenSet(tweens.get(), componentXml, "onTouch", "touch");   // ArcadeMaster: a touchAction button was tapped
 	buildTweenSet(tweens.get(), componentXml, "onExit", "exit");
 	buildTweenSet(tweens.get(), componentXml, "onIdle", "idle");
 	buildTweenSet(tweens.get(), componentXml, "onMenuIdle", "menuIdle");
