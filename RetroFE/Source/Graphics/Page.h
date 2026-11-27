@@ -17,6 +17,7 @@
 
 #include "../Collection/CollectionInfo.h"
 
+#include <functional>
 #include <map>
 #include <string>
 #include <list>
@@ -98,6 +99,14 @@ public:
     bool touchListAt(int monitor, float x, float y, int& offset);
     // ArcadeMaster: move the selection by `offset` items at once (a jump, like selectRandom)
     void selectByOffset(int offset);
+    // ArcadeMaster: breadcrumbs (reloadableText type="am_breadcrumb") - this page's collections, outermost first, and
+    // the whole path across RetroFE's page stack (set by RetroFE; "MAIN > RACING > ALL GAMES")
+    std::vector<std::string> collectionPath();
+    static std::function<std::string()> breadcrumbProvider;
+    // ArcadeMaster: touch panels - the panel shown on a monitor ("" = the layout has none), and switching it
+    std::string currentPanel(int monitor);
+    bool showPanel(int monitor, const std::string& panel);
+    bool panelVisible(const Component* c);
     int getLayoutWidthByMonitor(int monitor);
     int getLayoutHeightByMonitor(int monitor);
     void setLayoutWidthByMonitor(int monitor, int width);
@@ -270,6 +279,7 @@ private:
     std::vector<int> layoutHeight_;
     std::vector<int> layoutWidthByMonitor_;
     std::vector<int> layoutHeightByMonitor_;
+    std::map<int, std::string> currentPanel_;   // ArcadeMaster: touch panels, per monitor
     bool jukebox_;
     bool isLaunched_ = false;
 
