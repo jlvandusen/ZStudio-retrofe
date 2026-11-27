@@ -1197,6 +1197,23 @@ bool RetroFE::run() {
 
 		SDL_Event e;
 		while (SDL_PollEvent(&e)) input_.update(e);
+		{
+			// ArcadeMaster: touch buttons (docs/22) - a tap on a layout component with touchAction fires that action, and
+			// the same tap is then not also a Tap gesture / region tap
+			int tapScreen = -1; float tapX = 0.f, tapY = 0.f;
+			if (input_.pointer().takeTap(tapScreen, tapX, tapY) && currentPage_) {
+				const int m = tapScreen < 0 ? 0 : tapScreen;
+				const int lw = currentPage_->getLayoutWidthByMonitor(m), lh = currentPage_->getLayoutHeightByMonitor(m);
+				if (lw > 0 && lh > 0) {
+					const std::string action = currentPage_->touchActionAt(m, tapX * lw, tapY * lh);
+					if (!action.empty()) {
+						input_.pointer().suppressTap();
+						if (input_.pulseAction(action)) LOG_INFO("Touch", "button '" + action + "' on screen " + std::to_string(m));
+						else LOG_WARNING("Touch", "button action '" + action + "' is not a controls.conf action");
+					}
+				}
+			}
+		}
 		input_.updateKeystate(); // once per frame, AFTER consuming events, BEFORE processUserInput()
 		Haptics::instance().pump(); // ArcadeMaster: execute queued FFB effects on the main thread
 

@@ -117,8 +117,14 @@ public:
     void clearJoysticks();
     void reconfigure();
     void updateKeystate();
+    // ArcadeMaster: touch buttons (docs/22). The shared pointer recogniser, and "press" a controls.conf action by name
+    // (case-insensitive: "select", "back", "nextPlaylist", ...) for one short pulse. False for an unknown name.
+    PointerInput& pointer() { return *pointer_; }
+    bool pulseAction(const std::string& name);
 
 private:
+    std::map<std::string, KeyCode_E> actionCodes_;   // lowered controls.conf action name -> key code (every MapKey)
+    Uint32 actionPulseUntil_[KeyCodeMax] = {};
     bool MapKey(const std::string& keyDescription, KeyCode_E key);
     bool MapKey(const std::string& keyDescription, KeyCode_E key, bool required);
     bool HandleInputMapping(const std::string& token, KeyCode_E key, const std::string& configKey);

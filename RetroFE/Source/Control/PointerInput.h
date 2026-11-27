@@ -50,6 +50,10 @@ public:
     // true while the last tap on `screen` (-1 = any) fell in grid cell (col of cols, row of rows), 1-based
     bool tapInRegion(int screen, int col, int cols, int row, int rows) const;
     void reset();
+    // touch buttons (docs/22): the last tap, once - screen (-1 = unknown) and position in 0..1 of that screen's window.
+    // When a layout button took it, suppressTap() stops the same tap also firing Tap / zone / region bindings.
+    bool takeTap(int& screen, float& x, float& y);
+    void suppressTap();
 
     // "touchSwipeUp" -> SwipeUp (screen -1), "touch1Tap" -> Tap on screen 1, "mouseAxisX+" -> AxisXPlus
     static bool parse(const std::string& lowered, Gesture& out, int& screen);
@@ -70,6 +74,8 @@ private:
     std::array<std::array<bool, GestureCount>, Slots> active_{};
     std::array<std::array<Uint32, GestureCount>, Slots> pulseUntil_{};
     std::array<LastTap, Slots> lastRegionTap_{};
+    struct PendingTap { bool valid = false; int slot = 0; float x = 0.f, y = 0.f; };
+    PendingTap pendingTap_;
 
     std::map<SDL_FingerID, Finger> fingers_;
     int  maxFingersThisTouch_ = 0;
