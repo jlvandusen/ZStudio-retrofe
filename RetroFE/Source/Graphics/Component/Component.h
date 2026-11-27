@@ -90,6 +90,10 @@ public:
 	// touch component under the finger wins, and the tap is then not also seen by touch gestures / region taps.
 	// onTouch plays on the button that was hit (press feedback).
 	std::string touchAction;
+	// ArcadeMaster: touch panels (docs/22). panel="controls" puts the component in that panel of its screen: it is drawn
+	// and touchable only while that panel shows. touchAction="panel:controls" switches to it (onPanelEnter plays on the
+	// panel's components). The first panel a screen's layout names is shown at start. No panel = always shown.
+	std::string panel;
 	//   liveNeedle="1"           the angle ALSO rises with that axis (a pedal): 0 at rest, +liveNeedleSpan fully pressed
 	//   liveNeedleSpan="270"     degrees at full travel (a 270-degree dial sweep)
 	//   liveNeedleSmooth="0.85"  0 = jumps with the pedal, 0.9 = lags like a real needle (per frame)

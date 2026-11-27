@@ -743,6 +743,36 @@ void Page::selectRandom() {
 	invalidateIdleCache();
 }
 
+// ArcadeMaster (docs/22, touch panels): the shown panel per monitor; at start, the first panel the layout names there
+std::string Page::currentPanel(int monitor) {
+	auto it = currentPanel_.find(monitor);
+	if (it != currentPanel_.end()) return it->second;
+	std::string first;
+	for (auto& layer : LayerComponents_) {
+		for (Component* c : layer) {
+			if (c && !c->panel.empty() && c->baseViewInfo.Monitor == monitor) { first = c->panel; break; }
+		}
+		if (!first.empty()) break;
+	}
+	currentPanel_[monitor] = first;
+	return first;
+}
+
+bool Page::panelVisible(const Component* c) {
+	return c && (c->panel.empty() || c->panel == currentPanel(c->baseViewInfo.Monitor));
+}
+
+bool Page::showPanel(int monitor, const std::string& panel) {
+	if (panel.empty() || currentPanel(monitor) == panel) return false;
+	currentPanel_[monitor] = panel;
+	for (auto& layer : LayerComponents_) {
+		for (Component* c : layer) {
+			if (c && c->panel == panel && c->baseViewInfo.Monitor == monitor) c->triggerEvent("panelEnter");
+		}
+	}
+	return true;
+}
+
 // ArcadeMaster (docs/22, touch the list): a tap on a visible item that isn't the selected one jumps there
 bool Page::touchListAt(int monitor, float x, float y, int& offset) {
 	for (ScrollingList* menu : activeMenu_) {
@@ -1633,7 +1663,7 @@ void Page::draw(int monitor) {
 	for (unsigned int i = 0; i < NUM_LAYERS; ++i) {
 		// Draw all components in this layer for the given monitor
 		for (Component* c : LayerComponents_[i]) {
-			if (c && c->baseViewInfo.Monitor == monitor) {
+			if (c && c->baseViewInfo.Monitor == monitor && (c->panel.empty() || panelVisible(c))) {   // ArcadeMaster: touch panels
 				c->draw();
 			}
 		}
@@ -2367,6 +2397,7 @@ std::string Page::touchActionAt(int monitor, float x, float y) {
 			if (!comp || comp->touchAction.empty()) continue;
 			const ViewInfo& v = comp->baseViewInfo;
 			if (v.Monitor != monitor || v.Alpha < 0.05f) continue;
+			if (!comp->panel.empty() && !panelVisible(comp)) continue;   // a button in a panel that isn't showing
 			const float x0 = v.XRelativeToOrigin(), y0 = v.YRelativeToOrigin();
 			if (x >= x0 && x <= x0 + v.ScaledWidth() && y >= y0 && y <= y0 + v.ScaledHeight()) {
 				comp->triggerEvent("touch");

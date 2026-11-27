@@ -1207,7 +1207,12 @@ bool RetroFE::run() {
 				if (lw > 0 && lh > 0) {
 					const std::string action = currentPage_->touchActionAt(m, tapX * lw, tapY * lh);
 					int offset = 0;
-					if (!action.empty()) {
+					if (!action.empty() && action.compare(0, 6, "panel:") == 0) {
+						// touch panels (docs/22): switch the panel shown on this screen
+						input_.pointer().suppressTap();
+						if (currentPage_->showPanel(m, action.substr(6))) LOG_INFO("Touch", "panel '" + action.substr(6) + "' on screen " + std::to_string(m));
+					}
+					else if (!action.empty()) {
 						input_.pointer().suppressTap();
 						if (input_.pulseAction(action)) LOG_INFO("Touch", "button '" + action + "' on screen " + std::to_string(m));
 						else LOG_WARNING("Touch", "button action '" + action + "' is not a controls.conf action");
