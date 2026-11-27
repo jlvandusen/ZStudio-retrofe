@@ -319,6 +319,7 @@ set(RETROFE_SOURCES
     "${RETROFE_DIR}/Source/Execute/Input/Platform/KeyboardBackendWindows.cpp"
     "${RETROFE_DIR}/Source/Execute/Input/Platform/KeyboardBackendMac.cpp"
     "${RETROFE_DIR}/Source/Execute/Launcher.cpp"
+    "${RETROFE_DIR}/Source/Execute/GameHandOff.cpp"
     "${RETROFE_DIR}/Source/Execute/PatchExecutor.cpp"
     "${RETROFE_DIR}/Source/Execute/Platform/Windows/WindowsProcessManager.cpp"
     "${RETROFE_DIR}/Source/Execute/Platform/Unix/UnixProcessManager.cpp"
