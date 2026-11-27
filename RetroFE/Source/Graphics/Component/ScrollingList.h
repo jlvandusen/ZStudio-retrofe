@@ -150,6 +150,9 @@ public:
     void destroyItems();
     void setPoints(std::vector<ViewInfo*>* points, std::shared_ptr<std::vector<std::shared_ptr<AnimationEvents>>> tweenPoints);
     size_t getSelectedIndex() const;
+    // ArcadeMaster (docs/22, touch the list): the visible item drawn under (x, y) on `monitor`, as an offset from the
+    // selected item (0 = the selected one). False when no item is there.
+    bool touchOffsetAt(int monitor, float x, float y, int& offset);
     size_t nextSelectedIndex(bool forward) const;
     void setItemIndex(unsigned int index);
     size_t getSize() const;

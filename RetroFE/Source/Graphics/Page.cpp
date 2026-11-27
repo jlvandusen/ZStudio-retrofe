@@ -743,6 +743,38 @@ void Page::selectRandom() {
 	invalidateIdleCache();
 }
 
+// ArcadeMaster (docs/22, touch the list): a tap on a visible item that isn't the selected one jumps there
+bool Page::touchListAt(int monitor, float x, float y, int& offset) {
+	for (ScrollingList* menu : activeMenu_) {
+		if (menu && !menu->isPlaylist() && menu->touchOffsetAt(monitor, x, y, offset)) return true;
+	}
+	return false;
+}
+
+void Page::selectByOffset(int offset) {
+	ScrollingList* amenu = getAnActiveMenu();
+	if (!amenu || offset == 0) return;
+	const long long size = static_cast<long long>(amenu->getSize());
+	if (size <= 0) return;
+	long long idx = (static_cast<long long>(amenu->getSelectedIndex()) + offset) % size;
+	if (idx < 0) idx += size;
+	amenu->setItemIndex(static_cast<unsigned int>(idx));
+
+	size_t index = amenu->getScrollOffsetIndex();
+	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
+		ScrollingList* menu = *it;
+		if (menu && menu != amenu && !menu->isPlaylist()) {
+			menu->syncToSelectedIndex(index);
+		}
+	}
+	setSelectedItem();
+	onNewScrollItemSelected();
+	if (highlightSoundChunk_) {
+		highlightSoundChunk_->play();
+	}
+	invalidateIdleCache();
+}
+
 // ArcadeMaster (cabinet link): the same steps as selectRandom(), to a named game. False = not in this list.
 bool Page::selectItemByName(const std::string& name, const std::string& collection) {
 	ScrollingList* amenu = getAnActiveMenu();
