@@ -1249,6 +1249,23 @@ bool RetroFE::run() {
 		}
 
 		SDL_Event e;
+		{
+			// ArcadeMaster: presses made while the frontend was frozen (opening a big list, a game just ended) are not
+			// carried into the next screen - James 2026-11-27: kept pressing during the Arcade load and a game started.
+			static Uint32 amLastPoll = 0;
+			const Uint32 amNow = SDL_GetTicks();
+			if (amLastPoll && amNow - amLastPoll > 300) {
+				SDL_PumpEvents();
+				SDL_FlushEvents(SDL_KEYDOWN, SDL_KEYUP);
+				SDL_FlushEvents(SDL_JOYAXISMOTION, SDL_JOYBUTTONUP);
+				SDL_FlushEvents(SDL_CONTROLLERAXISMOTION, SDL_CONTROLLERBUTTONUP);
+				SDL_FlushEvents(SDL_FINGERDOWN, SDL_FINGERMOTION);
+				SDL_FlushEvents(SDL_MOUSEBUTTONDOWN, SDL_MOUSEBUTTONUP);
+				input_.resetStates();
+				LOG_INFO("Input", "frozen " + std::to_string(amNow - amLastPoll) + " ms: presses made meanwhile dropped");
+			}
+			amLastPoll = amNow;
+		}
 		while (SDL_PollEvent(&e)) input_.update(e);
 		{
 			// ArcadeMaster: touch buttons (docs/22) - a tap on a layout component with touchAction fires that action, and
