@@ -31,12 +31,14 @@ private:
     std::vector<Win> bigWindows(double cover);
     void minimiseEmulatorConsoles();
     void bringForward(HWND game);
+    void guardFront();
     void showGame(HWND game);
     void restoreFrontend();
 
     bool enabled_ = false;
     std::chrono::steady_clock::time_point start_, lastTick_;
-    std::set<HWND> baseline_, moved_, shown_, broughtUp_, consolesDone_;
+    std::set<HWND> baseline_, moved_, shown_, broughtUp_, consolesDone_, intrudersDone_;
+    std::vector<HWND> seenOrder_;   // game windows in the order they came up: the first still showing is kept in front
     std::map<HWND, std::chrono::steady_clock::time_point> seen_;
     std::vector<HWND> minimisedFrontend_;
 };

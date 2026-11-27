@@ -55,6 +55,19 @@ bool notTheGame(const std::wstring& name) {
     return false;
 }
 
+// desktop programs that must never sit in front of a running game: when one takes the front it is minimised and the
+// game switched back in (2P stand-up 2026-11-27: VS Code came back in front of MAME six times in 30 s while only the
+// game was re-activated). Never Task Manager or RustDesk: somebody may be ending a hung game or helping from afar.
+const wchar_t* kIntruders[] = {
+    L"Code", L"Code - Insiders", L"Claude", L"WindowsTerminal", L"OpenConsole", L"conhost", L"cmd", L"powershell", L"pwsh",
+    L"msedge", L"chrome", L"firefox", L"Teams", L"ms-teams", L"Discord", L"Slack", L"Spotify", L"OneDrive", L"notepad",
+    L"devenv" };
+
+bool intruder(const std::wstring& name) {
+    for (auto* n : kIntruders) if (iequals(name, n)) return true;
+    return false;
+}
+
 std::string narrow(const std::wstring& w) {
     if (w.empty()) return {};
     int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -82,6 +95,15 @@ void altTap() {
     in[0].ki.wVk = in[1].ki.wVk = VK_MENU;
     in[1].ki.dwFlags = KEYEVENTF_KEYUP;
     SendInput(2, in, sizeof(INPUT));
+}
+
+// the game window up and active. Only calls that do not wait for the game's answer: a window whose thread is not
+// reading messages (one of Arctic Thunder's, 2026-11-27) held a plain ShowWindow / BringWindowToTop until the game
+// ended, and with it the frontend's whole wait loop - the hand-off, the quit combo, everything.
+void raiseGame(HWND game) {
+    ShowWindowAsync(game, IsIconic(game) ? SW_RESTORE : SW_SHOW);
+    SetWindowPos(game, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS);
+    SetForegroundWindow(game);
 }
 }
 
@@ -125,7 +147,8 @@ void GameHandOff::tick() {
     auto now = std::chrono::steady_clock::now();
     if (now - lastTick_ < std::chrono::milliseconds(400)) return;
     lastTick_ = now;
-    if (now - start_ > std::chrono::seconds(120)) return;     // the game has long settled: hands off
+    guardFront();
+    if (now - start_ > std::chrono::seconds(120)) return;     // the game has settled: from now on only the guard above
 
     minimiseEmulatorConsoles();
     DpiScope dpi;
@@ -137,14 +160,14 @@ void GameHandOff::tick() {
         if (!w.primary) {
             // same place on the main screen, same size (a borderless full-screen game stays full screen)
             int x = main.left + (w.rect.left - w.monitor.left), y = main.top + (w.rect.top - w.monitor.top);
-            SetWindowPos(w.hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            SetWindowPos(w.hwnd, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
             moved_.insert(w.hwnd);
             LOG_INFO("GameHandOff", "game window " + narrow(w.process) + " opened on another screen - moved to the main screen");
             continue;
         }
         bringForward(w.hwnd);
         auto it = seen_.find(w.hwnd);
-        if (it == seen_.end()) { seen_[w.hwnd] = now; continue; }
+        if (it == seen_.end()) { seen_[w.hwnd] = now; seenOrder_.push_back(w.hwnd); continue; }
         long mw = main.right - main.left, mh = main.bottom - main.top;
         if (!shown_.count(w.hwnd) && now - it->second > std::chrono::seconds(3) &&
             (w.rect.right - w.rect.left) >= mw * 0.9 && (w.rect.bottom - w.rect.top) >= mh * 0.9) {
@@ -167,11 +190,31 @@ void GameHandOff::minimiseEmulatorConsoles() {
         std::transform(low.begin(), low.end(), low.begin(), ::towlower);
         // only an emulator's console (its path or RetroBat in the title): never somebody's own terminal
         if (low.find(L"\\emulators\\") == std::wstring::npos && low.find(L"retrobat") == std::wstring::npos) return TRUE;
-        ShowWindow(h, SW_MINIMIZE);
+        ShowWindowAsync(h, SW_MINIMIZE);
         self->consolesDone_.insert(h);
         LOG_INFO("GameHandOff", "emulator console '" + narrow(title) + "' minimised");
         return TRUE;
     }, reinterpret_cast<LPARAM>(&ctx));
+}
+
+// a desktop program in front of the running game: minimised, the game switched back in. Runs for the whole game. The
+// game window may have minimised itself when it lost the front (a full-screen game does), so a minimised one counts.
+void GameHandOff::guardFront() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return;
+    for (HWND h : seenOrder_) if (h == fg) return;
+    DWORD fgPid = 0; GetWindowThreadProcessId(fg, &fgPid);
+    if (fgPid == GetCurrentProcessId()) return;
+    std::wstring fgName = processName(fgPid);
+    wchar_t cls[64] = {}; GetClassNameW(fg, cls, 64);
+    const bool folder = iequals(fgName, L"explorer") && _wcsicmp(cls, L"CabinetWClass") == 0;
+    if (!folder && !intruder(fgName)) return;
+    // the newest full-screen game window that was shown, else the first game window still there (a helper window that
+    // came up first must not win over the real picture)
+    for (auto it = seenOrder_.rbegin(); it != seenOrder_.rend(); ++it) if (shown_.count(*it) && IsWindow(*it) && IsWindowVisible(*it)) { bringForward(*it); return; }
+    for (HWND h : seenOrder_) if (IsWindow(h) && IsWindowVisible(h)) { bringForward(h); return; }
+    if (intrudersDone_.insert(fg).second)
+        LOG_INFO("GameHandOff", narrow(fgName) + " is in front, but no game window to bring back (" + std::to_string(seenOrder_.size()) + " seen)");
 }
 
 // the game in front with the keyboard - only while the frontend, the shell or nothing has the foreground, so a game's
@@ -182,11 +225,24 @@ void GameHandOff::bringForward(HWND game) {
     if (fg) {
         DWORD fgPid = 0; GetWindowThreadProcessId(fg, &fgPid);
         std::wstring fgName = fgPid == GetCurrentProcessId() ? L"retrofe" : processName(fgPid);
+        wchar_t cls[64] = {}; GetClassNameW(fg, cls, 64);
+        const bool folder = iequals(fgName, L"explorer") && _wcsicmp(cls, L"CabinetWClass") == 0;   // a File Explorer window, not the desktop
+        if (folder || intruder(fgName)) {
+            // minimised, not just covered: it would come back. Windows then activates the next window, the game; the
+            // switch below makes it a real one (a full-screen MAME stayed black and deaf to a plain bring-forward)
+            ShowWindowAsync(fg, SW_MINIMIZE);
+            if (intrudersDone_.insert(fg).second)
+                LOG_INFO("GameHandOff", narrow(fgName) + " came in front of the game - minimised, game switched back in");
+            Sleep(150);
+            altTap();
+            raiseGame(game);
+            return;
+        }
         if (!iequals(fgName, L"retrofe") && !iequals(fgName, L"explorer")) return;
     }
     DWORD ft = fg ? GetWindowThreadProcessId(fg, nullptr) : 0, me = GetCurrentThreadId();
     if (ft && ft != me) AttachThreadInput(me, ft, TRUE);
-    ShowWindow(game, SW_RESTORE); BringWindowToTop(game); SetForegroundWindow(game);
+    raiseGame(game);
     if (ft && ft != me) AttachThreadInput(me, ft, FALSE);
     if (broughtUp_.insert(game).second) {
         DWORD pid = 0; GetWindowThreadProcessId(game, &pid);
@@ -215,7 +271,7 @@ void GameHandOff::showGame(HWND game) {
     // Supermodel draws nothing until its window loses the focus and gets it back: the touch window takes it for a moment
     if (away) { altTap(); SetForegroundWindow(away); Sleep(400); }
     altTap();
-    ShowWindow(game, SW_RESTORE); BringWindowToTop(game); SetForegroundWindow(game);
+    raiseGame(game);
     DWORD pid = 0; GetWindowThreadProcessId(game, &pid);
     LOG_INFO("GameHandOff", "game window " + narrow(processName(pid)) + " shown: frontend minimised, game activated" +
         std::string(away ? " (focus round trip via the touch screen)" : ""));
