@@ -225,6 +225,8 @@ private:
     AttractMode        attract_;
     bool               menuMode_;
     bool               attractMode_;
+    bool               attractRollWasActive_ = false;   // ArcadeMaster: attract roll just ended -> load its art
+    bool               attractArtPending_ = false;
 	int                attractModePlaylistCollectionNumber_;
 	bool               reboot_;
     bool               kioskLock_;

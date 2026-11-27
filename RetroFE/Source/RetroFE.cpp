@@ -3165,6 +3165,21 @@ bool RetroFE::run() {
 				Image::beginFrameUploads(g_uploadBudgetMs);   // ArcadeMaster: this frame's texture upload budget
 				currentPage_->update(animationDt);
 
+				// ArcadeMaster: attract mode rolls the list with scroll steps only, so art that loads on a selection (the
+				// controls card, anything without menuScrollReload) kept the game it showed before the roll while the title
+				// moved on. When a roll ends and the list stands still, load the new game's art the way a press does.
+				{
+					const bool rolling = attract_.isActive();
+					if (attractRollWasActive_ && !rolling) attractArtPending_ = true;
+					if (rolling) attractArtPending_ = false;
+					attractRollWasActive_ = rolling;
+					if (attractArtPending_ && state_ == RETROFE_IDLE && currentPage_->isMenuIdle() &&
+						currentPage_->getScrolling() == Page::ScrollDirectionIdle) {
+						attractArtPending_ = false;
+						currentPage_->highlightLoadArt();
+					}
+				}
+
 				if (!splashMode && !paused_)
 				{
 					if (currentPage_->isAttractIdle())
