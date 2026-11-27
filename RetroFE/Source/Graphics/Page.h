@@ -77,6 +77,10 @@ public:
     void setHighlightSound(Sound *chunk);
     void setSelectSound(Sound *chunk);
     Item *getSelectedMenuItem();
+    // ArcadeMaster: the game the per-game pictures (controls card, backdrop ...) were last loaded for. The main loop
+    // compares it with the list's real selection: attract mode and other moves that do not go through the highlight
+    // steps left the card of an earlier game on screen (RACE1, 2026-11-27).
+    Item *artItem() const { return artItem_; }
     ScrollingList* getAnActiveMenu();
     bool addComponent(Component *c);
     void pageScroll(ScrollDirection direction);
@@ -268,6 +272,7 @@ private:
     bool userScrollInputActive_ = false;
 
     Item *selectedItem_;
+    Item *artItem_ = nullptr;
     Text *textStatusComponent_;
     Sound *loadSoundChunk_;
     Sound *unloadSoundChunk_;
