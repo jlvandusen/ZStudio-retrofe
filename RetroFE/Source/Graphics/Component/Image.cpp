@@ -51,11 +51,25 @@ void Image::allocateGraphicsMemory() {
 	status_ = LoadStatus::Error;
 }
 
+double Image::uploadBudgetMs_ = 0.0;
+double Image::uploadSpentMs_ = 0.0;
+
+void Image::beginFrameUploads(double budgetMs) { uploadBudgetMs_ = budgetMs; uploadSpentMs_ = 0.0; }
+
+// finalizeLoad unless this frame has used its upload budget (the picture then stays Loading and finishes later)
+bool Image::tryFinalizeLoad() {
+	if (uploadBudgetMs_ > 0.0 && uploadSpentMs_ >= uploadBudgetMs_) return false;
+	const Uint64 t0 = SDL_GetPerformanceCounter();
+	finalizeLoad();
+	uploadSpentMs_ += (SDL_GetPerformanceCounter() - t0) * 1000.0 / static_cast<double>(SDL_GetPerformanceFrequency());
+	return true;
+}
+
 void Image::pumpGraphicsPreparation() {
 	if (status_ == LoadStatus::Loading) {
 		if (loadTask_.valid() &&
 			loadTask_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-			finalizeLoad();
+			tryFinalizeLoad();
 		}
 	}
 }
@@ -265,7 +279,7 @@ bool Image::update(float dt) {
 	// Check background asset status in the logic pass, BEFORE drawing starts
 	if (status_ == LoadStatus::Loading) {
 		if (loadTask_.valid() && loadTask_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-			finalizeLoad();
+			tryFinalizeLoad();
 		}
 	}
 

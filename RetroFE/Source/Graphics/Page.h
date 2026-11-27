@@ -122,6 +122,9 @@ public:
     void freeGraphicsMemory();
     void allocateGraphicsMemory();
     void pumpGraphicsPreparation();
+    // ArcadeMaster (docs/14 item 5): with perfDetail on, the pump times each component and keeps the slowest three
+    static bool perfDetail;
+    std::string perfSlowest;
     bool isGraphicsReadyForFirstRender() const;
     void deInitializeFonts( ) const;
     void initializeFonts( ) const;

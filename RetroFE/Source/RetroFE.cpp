@@ -29,6 +29,7 @@
 #include "Database/IScoredProvider.h"
 #include "Execute/Launcher.h"
 #include "Graphics/Component/ScrollingList.h"
+#include "Graphics/Component/Image.h"
 #include "Graphics/Page.h"
 #include "Graphics/PageBuilder.h"
 #include "Graphics/Component/Text.h"
@@ -792,19 +793,44 @@ void RetroFE::linkPoll() {
 	}
 }
 
+// ArcadeMaster: settings.conf "perfLog = N" (frame-time telemetry below); also turns on the list-open timing
+static int g_perfLogSec = 0;
+static int g_uploadBudgetMs = 0;   // settings.conf textureUploadBudgetMs (Image::beginFrameUploads)
+
 void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
 	if (!page) {
 		return;
 	}
 
+	// ArcadeMaster (docs/14 item 5): with perfLog on, each pass logs its wait and pump time and the slowest components
+	const bool detail = g_perfLogSec > 0;
+	Page::perfDetail = detail;
+	const double perfF = static_cast<double>(SDL_GetPerformanceFrequency()) / 1000.0;
+	// with a texture upload budget the page is shown after one budgeted pass; the rest finishes over the next frames
+	if (g_uploadBudgetMs > 0) maxPasses = 1;
 	for (int i = 0; i < maxPasses; ++i) {
-		waitForAsyncAssets();
+		Image::beginFrameUploads(g_uploadBudgetMs);
+		const Uint64 p0 = SDL_GetPerformanceCounter();
+		// with a budget the page does not wait for every background decode: what is decoded is uploaded now, the rest
+		// arrives over the next frames (only the frame clock is reset, as waitForAsyncAssets does)
+		if (g_uploadBudgetMs > 0) lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
+		else waitForAsyncAssets();
+		const Uint64 p1 = SDL_GetPerformanceCounter();
 		page->pumpGraphicsPreparation();
-
-		if (page->isGraphicsReadyForFirstRender()) {
+		const bool ready = page->isGraphicsReadyForFirstRender();
+		if (detail) {
+			char buf[512];
+			snprintf(buf, sizeof(buf), "first render pass %d: wait %.1f ms, pump %.1f ms%s | slowest: %s", i + 1,
+				(p1 - p0) / perfF, (SDL_GetPerformanceCounter() - p1) / perfF, ready ? " (ready)" : "", page->perfSlowest.c_str());
+			LOG_INFO("Perf", buf);
+		}
+		if (ready) {
+			Page::perfDetail = false;
 			return;
 		}
 	}
+	Page::perfDetail = false;
+	if (g_uploadBudgetMs > 0) return;   // expected: the remaining pictures finish over the next frames
 
 	LOG_WARNING("RetroFE", "Page did not fully settle for first render after " + std::to_string(maxPasses) + " preparation passes");
 }
@@ -814,7 +840,6 @@ void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
 // ArcadeMaster: frame-time telemetry. settings.conf "perfLog = N" logs every N seconds:
 //   frames, p50 / p95 / p99 / max frame time and hitches (> 2x target frame time).
 // ---------------------------------------------------------------------------
-static int g_perfLogSec = 0;
 static void perfSample(double frameMs, double targetMs, double nowMs) {
 	if (g_perfLogSec <= 0) return;
 	static std::vector<float> samples;
@@ -920,7 +945,8 @@ bool RetroFE::run() {
 		return false;
 	}
 	Haptics::instance().initialize(config_);   // ArcadeMaster: frontend force feedback (ffb = yes)
-	config_.getProperty("perfLog", g_perfLogSec);   // ArcadeMaster: frame-time telemetry interval (s)
+	config_.getProperty("perfLog", g_perfLogSec);   
+	config_.getProperty("textureUploadBudgetMs", g_uploadBudgetMs);   // ArcadeMaster: docs/14 item 5 (0 = off)   // ArcadeMaster: frame-time telemetry interval (s)
 
 	// =================================================================
 	// PHASE 3: CONTEXT PROPERTY CONVERSION ZONE (Eliminates the Data Race)
@@ -2038,6 +2064,9 @@ bool RetroFE::run() {
 			{
 				const std::string nextPageName = nextPageItem_ ? nextPageItem_->name : "";
 				const std::string collectionName = currentPage_->getCollectionName();
+				// ArcadeMaster: where the time goes when a list opens (docs/14 item 5): one line per opening with perfLog on
+				const Uint64 amT0 = SDL_GetPerformanceCounter();
+				Uint64 amTCollection = amT0, amTPage = amT0, amTSelect = amT0, amTAlloc = amT0;
 
 				if (currentPage_->getSelectedItem())
 					l.LEDBlinky(8, currentPage_->getSelectedItem()->name, currentPage_->getSelectedItem());
@@ -2057,6 +2086,8 @@ bool RetroFE::run() {
 						break;
 					}
 				}
+
+				amTCollection = SDL_GetPerformanceCounter();
 
 				if (!menuMode_)
 				{
@@ -2088,6 +2119,7 @@ bool RetroFE::run() {
 					currentPage_->setLocked(kioskLock_);
 				}
 
+				amTPage = SDL_GetPerformanceCounter();
 				cycleVector_.clear();
 				config_.setProperty("currentCollection", nextPageName);
 
@@ -2124,8 +2156,19 @@ bool RetroFE::run() {
 
 				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
+				amTSelect = SDL_GetPerformanceCounter();
 				currentPage_->allocateGraphicsMemory();
+				amTAlloc = SDL_GetPerformanceCounter();
 				preparePageForFirstRender(currentPage_);
+				if (g_perfLogSec > 0) {
+					const double f = static_cast<double>(SDL_GetPerformanceFrequency()) / 1000.0;
+					const Uint64 amTEnd = SDL_GetPerformanceCounter();
+					char buf[256];
+					snprintf(buf, sizeof(buf), "open %s: %.1f ms = collection %.1f + page %.1f + select %.1f + allocate %.1f + first render %.1f",
+						nextPageName.c_str(), (amTEnd - amT0) / f, (amTCollection - amT0) / f, (amTPage - amTCollection) / f,
+						(amTSelect - amTPage) / f, (amTAlloc - amTSelect) / f, (amTEnd - amTAlloc) / f);
+					LOG_INFO("Perf", buf);
+				}
 				if (currentPage_->getCollectionSize() == 0)
 				{
 					bool backOnEmpty = false;
@@ -3081,6 +3124,7 @@ bool RetroFE::run() {
 					attract_.reset();
 				}
 
+				Image::beginFrameUploads(g_uploadBudgetMs);   // ArcadeMaster: this frame's texture upload budget
 				currentPage_->update(animationDt);
 
 				if (!splashMode && !paused_)
