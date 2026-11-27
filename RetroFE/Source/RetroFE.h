@@ -61,6 +61,9 @@ public:
     bool     deInitialize( );
     void waitForAsyncAssets();
     void preparePageForFirstRender(Page* page, int maxPasses = 5);
+    void linkPoll();                 // ArcadeMaster: cabinet link (Control/AmLink.h)
+    bool linkRemote_ = false;        // the next select / launch was asked for by the link helper, not a player
+    Item linkShowItem_;              // ArcadeMaster: "show <collection>" opens this (only its name is set)
     bool     run( );
     void     freeGraphicsMemory( );
     void     allocateGraphicsMemory( );
@@ -171,6 +174,8 @@ private:
     };
 
     RETROFE_STATE state_ = RETROFE_IDLE;
+    Uint32 stateSince_ = 0;      // ArcadeMaster: when state_ last changed (pageIdle)
+    bool pageIdle();             // ArcadeMaster: the page is idle, or a waiting step has waited 3 s
     RETROFE_STATE resumeAfterInfoExit_ = RETROFE_IDLE;
     void setState(RETROFE_STATE newState);
     RETROFE_STATE getState() const;

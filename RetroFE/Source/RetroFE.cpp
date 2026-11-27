@@ -21,6 +21,7 @@
 #include "Collection/MenuParser.h"
 #include "Control/Restrictor/RestrictorManager.h"
 #include "Control/Haptics.h"   // ArcadeMaster: frontend force feedback
+#include "Control/AmLink.h"    // ArcadeMaster: cabinet link
 #include "Control/UserInput.h"
 #include "Database/Configuration.h"
 #include "Database/GlobalOpts.h"
@@ -715,6 +716,82 @@ void RetroFE::waitForAsyncAssets() {
 	lastFrameTimePointMs_ = SDL_GetPerformanceCounter() * 1000.0 / freq_;
 }
 
+// ---------------------------------------------------------------------------
+// ArcadeMaster: cabinet link. Once a frame: say what is selected (when it changed), a heartbeat every second, and act
+// on a command from the helper on this PC - only while standing still in a menu:
+//   out  hello  <menu> <ms since a real press>                          every second
+//        select <user|remote|auto> <menu> <playlist> <item> <item's collection> <game|menu>
+//        launch <user|remote> <menu> <item> <item's collection>
+//        miss   <item>                                                  a goto for a game this menu does not have
+//   in   goto <item> [<collection>]     jump to that game (the "random game" path, to a named game)
+//        open                           what the Select button does: start the game / enter the menu
+// ---------------------------------------------------------------------------
+void RetroFE::linkPoll() {
+	AmLink& link = AmLink::instance();
+	static std::string lastSent;
+	static uint64_t lastHello = 0;
+	const uint64_t now = SDL_GetPerformanceCounter();
+	const std::string menu = currentPage_->getCollectionName();
+
+	if (static_cast<double>(now - lastHello) * 1000.0 / static_cast<double>(freq_) >= 1000.0) {
+		lastHello = now;
+		link.send("hello\t" + menu + "\t" + std::to_string(static_cast<long long>(std::min(link.msSinceUserInput(), 9.0e11))));
+	}
+
+	const bool still = (state_ == RETROFE_IDLE) && !menuMode_ && !currentPage_->isMenuScrolling();
+	Item* sel = currentPage_->getSelectedItem();
+	if (state_ == RETROFE_IDLE && sel) {
+		const std::string key = menu + "\t" + currentPage_->getPlaylistName() + "\t" + sel->name + "\t" +
+			(sel->collectionInfo ? sel->collectionInfo->name : "") + "\t" + (sel->leaf ? "game" : "menu");
+		if (key != lastSent) {
+			lastSent = key;
+			link.send(std::string("select\t") + (linkRemote_ ? "remote" : (link.msSinceUserInput() < 3000.0 ? "user" : "auto")) + "\t" + key);
+			linkRemote_ = false;
+		}
+	}
+
+	std::string cmd;
+	while (link.receive(cmd)) {
+		// ArcadeMaster: attract mode keeps the menu moving, so a command never found it standing still (the touch search
+		// typed for 20 s and its pick was dropped every time): a command stops attract, the helper's resend then lands
+		if (!still || kioskLock_) { if (!kioskLock_) attract_.reset(); continue; }   // busy: dropped, the helper sends again
+		std::vector<std::string> p;
+		std::stringstream ss(cmd); std::string part;
+		while (std::getline(ss, part, '\t')) p.push_back(part);
+		if (p.empty()) continue;
+		if (p[0] == "goto" && p.size() >= 2) {
+			if (sel && sel->name == p[1] && (p.size() < 3 || p[2].empty() || !sel->collectionInfo || sel->collectionInfo->name == p[2])) break;   // already there
+			if (currentPage_->selectItemByName(p[1], p.size() >= 3 ? p[2] : "")) {
+				linkRemote_ = true;
+				attract_.reset();
+				setState(RETROFE_MENUJUMP_REQUEST);
+			}
+			else link.send("miss\t" + p[1]);
+			break;
+		}
+		if (p[0] == "open" && sel) {
+			nextPageItem_ = sel;
+			linkRemote_ = true;
+			attract_.reset();
+			setState(sel->leaf ? RETROFE_LAUNCH_ENTER : RETROFE_NEXT_PAGE_REQUEST);
+			break;
+		}
+		// ArcadeMaster: show <collection> - open that list the way Select opens a menu entry (the page under it stays, so
+		// Back returns). The search across all systems sends it, then "goto <item>" until the game is selected.
+		if (p[0] == "show" && p.size() >= 2 && !p[1].empty()) {
+			if (menu == p[1]) break;                               // already there
+			linkShowItem_ = Item();
+			linkShowItem_.name = p[1];
+			linkShowItem_.leaf = false;
+			nextPageItem_ = &linkShowItem_;
+			linkRemote_ = true;
+			attract_.reset();
+			setState(RETROFE_NEXT_PAGE_REQUEST);
+			break;
+		}
+	}
+}
+
 void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
 	if (!page) {
 		return;
@@ -907,6 +984,13 @@ bool RetroFE::run() {
 	std::string firstCollection = "Main";
 	config_.getProperty(OPTION_FIRSTCOLLECTION, firstCollection);
 	config_.getProperty(OPTION_ATTRACTMODEFAST, attractModeFast);
+	{	// ArcadeMaster: cabinet link (off unless settings.conf says linkEvents = yes)
+		bool linkOn = false; int linkSend = 47801, linkRecv = 47802;
+		config_.getProperty("linkEvents", linkOn);
+		config_.getProperty("linkSendPort", linkSend);
+		config_.getProperty("linkRecvPort", linkRecv);
+		AmLink::instance().configure(linkOn, linkSend, linkRecv);
+	}
 	config_.getProperty(OPTION_ATTRACTMODELAUNCH, attractModeLaunch);
 	config_.getProperty(OPTION_ATTRACTMODELAUNCHMINMAXSCROLLS, attractModeLaunchMinMaxScrolls);
 
@@ -1123,7 +1207,7 @@ bool RetroFE::run() {
 		// Check for pending hot-reload (SIGUSR1). Only act when safe: idle, at root depth.
 		if (!splashMode && reloadRequested_.exchange(false)
 			&& state_ == RETROFE_IDLE && pages_.empty()
-			&& currentPage_ && currentPage_->isIdle())
+			&& currentPage_ && pageIdle())
 		{
 			LOG_INFO("RetroFE", "SIGUSR1 received – reloading layout XML");
 			setState(RETROFE_RELOAD_REQUEST);
@@ -1145,6 +1229,7 @@ bool RetroFE::run() {
 				setState(inputState);
 			}
 		}
+		if (!splashMode && currentPage_ && AmLink::instance().enabled()) linkPoll();   // ArcadeMaster: cabinet link
 
 		if (nextFrameTime < frameNowMs) {
 			nextFrameTime = frameNowMs;
@@ -1241,7 +1326,7 @@ bool RetroFE::run() {
 
 			// Wait for onEnter animation to finish
 			case RETROFE_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				bool startCollectionEnter = false;
 				config_.getProperty(OPTION_STARTCOLLECTIONENTER, startCollectionEnter);
@@ -1260,7 +1345,7 @@ bool RetroFE::run() {
 
 			// Handle end of splash mode
 			case RETROFE_SPLASH_EXIT:
-			if (currentPage_ && currentPage_->isIdle()) {
+			if (currentPage_ && pageIdle()) {
 				// Save layout information before cleanup
 				int currentLayout = currentPage_->getCurrentLayout();
 
@@ -1613,7 +1698,7 @@ bool RetroFE::run() {
 
 			// Switch playlist; wait for onHighlightExit animation to finish; load art
 			case RETROFE_PLAYLIST_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				// lots of different toggles and menu jumps trigger this by accident
 				if (currentPage_->fromPlaylistNav)
@@ -1634,7 +1719,7 @@ bool RetroFE::run() {
 
 			// Switch playlist; start onHighlightEnter animation
 			case RETROFE_PLAYLIST_LOAD_ART:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				currentPage_->reallocateMenuSpritePoints(); // update playlist menu
 				preparePageForFirstRender(currentPage_);
@@ -1645,7 +1730,7 @@ bool RetroFE::run() {
 
 			// Switch playlist; wait for onHighlightEnter animation to finish
 			case RETROFE_PLAYLIST_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 
 				currentPage_->onNewItemSelected();
@@ -1673,7 +1758,7 @@ bool RetroFE::run() {
 
 			// Jump in menu; wait for onMenuJumpExit animation to finish; load art
 			case RETROFE_MENUJUMP_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				setState(RETROFE_MENUJUMP_LOAD_ART);
 			}
@@ -1681,7 +1766,7 @@ bool RetroFE::run() {
 
 			// Jump in menu; start onMenuJumpEnter animation
 			case RETROFE_MENUJUMP_LOAD_ART:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				currentPage_->onNewItemSelected();
 				currentPage_->reallocateMenuSpritePoints(false); // skip updating playlist menu
@@ -1693,7 +1778,7 @@ bool RetroFE::run() {
 
 			// Jump in menu; wait for onMenuJump animation to finish
 			case RETROFE_MENUJUMP_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				setState(RETROFE_IDLE);
 			}
@@ -1736,7 +1821,7 @@ bool RetroFE::run() {
 					break;
 				}
 			}
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				setState(RETROFE_IDLE);
 			}
@@ -1922,7 +2007,7 @@ bool RetroFE::run() {
 
 			// Wait for onMenuExit animation to finish; load new page if applicable; load art
 			case RETROFE_NEXT_PAGE_MENU_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				const std::string nextPageName = nextPageItem_ ? nextPageItem_->name : "";
 				const std::string collectionName = currentPage_->getCollectionName();
@@ -2042,7 +2127,7 @@ bool RetroFE::run() {
 
 			// Wait for onMenuEnter animation to finish
 			case RETROFE_NEXT_PAGE_MENU_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				Haptics::instance().requestThunk();   // ArcadeMaster: "gear change" when a collection opens
 				inputClear = false;
@@ -2102,7 +2187,7 @@ bool RetroFE::run() {
 
 			// Wait for the menu exit animation to finish
 			case RETROFE_COLLECTION_DOWN_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				// remember current collection and playlist
 				std::string collectionName = currentPage_->getCollectionName();
@@ -2199,7 +2284,7 @@ bool RetroFE::run() {
 
 			// Waiting for enter animation to stop
 			case RETROFE_COLLECTION_DOWN_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				int attractModePlaylistCollectionNumber = 0;
 				config_.getProperty("attractModePlaylistCollectionNumber", attractModePlaylistCollectionNumber);
@@ -2259,7 +2344,7 @@ bool RetroFE::run() {
 
 			// Wait for onHighlightExit animation to finish; load art
 			case RETROFE_COLLECTION_HIGHLIGHT_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				currentPage_->highlightLoadArt();
 				setState(RETROFE_COLLECTION_HIGHLIGHT_LOAD_ART);
@@ -2276,7 +2361,7 @@ bool RetroFE::run() {
 
 			// Wait for onHighlightEnter animation to finish
 			case RETROFE_COLLECTION_HIGHLIGHT_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				// The animation finished, and the global input loop didn't 
 				// interrupt us with a scroll command. Proceed to enter!
@@ -2307,7 +2392,7 @@ bool RetroFE::run() {
 
 			// Wait for the menu exit animation to finish
 			case RETROFE_COLLECTION_UP_EXIT:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				// remember current collection and playlist
 				std::string collectionName = currentPage_->getCollectionName();
@@ -2384,7 +2469,7 @@ bool RetroFE::run() {
 
 			// Waiting for enter animation to stop
 			case RETROFE_COLLECTION_UP_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				currentPage_->setScrolling(Page::ScrollDirectionBack);
 				currentPage_->scroll(false, false);
@@ -2436,7 +2521,7 @@ bool RetroFE::run() {
 			break;
 
 			case RETROFE_ATTRACT_LAUNCH_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				currentPage_->setSelectedItem();
 				currentPage_->onNewItemSelected();
@@ -2448,7 +2533,7 @@ bool RetroFE::run() {
 
 			break;
 			case RETROFE_ATTRACT_LAUNCH_REQUEST:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				nextPageItem_ = currentPage_->getSelectedItem();
 				launchEnter();
@@ -2491,6 +2576,12 @@ bool RetroFE::run() {
 			}
 			else
 			{
+				if (nextPageItem_ && AmLink::instance().enabled())   // ArcadeMaster: tell the helper a game is starting, and who asked
+				{
+					AmLink::instance().send(std::string("launch\t") + (linkRemote_ ? "remote" : "user") + "\t" + currentPage_->getCollectionName() + "\t" +
+						nextPageItem_->name + "\t" + (nextPageItem_->collectionInfo ? nextPageItem_->collectionInfo->name : ""));
+					linkRemote_ = false;
+				}
 				currentPage_->enterGame();  // Start onGameEnter animation
 				currentPage_->update(0.0f);
 				currentPage_->playSelect(); // Play launch sound
@@ -2500,7 +2591,7 @@ bool RetroFE::run() {
 
 			// Wait for onGameEnter animation to finish; launch game; start onGameExit animation
 			case RETROFE_LAUNCH_REQUEST:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				bool unloadSDL = false;
 				config_.getProperty(OPTION_UNLOADSDL, unloadSDL);
@@ -2604,7 +2695,7 @@ bool RetroFE::run() {
 			// Wait for onGameExit animation to finish
 			case RETROFE_LAUNCH_EXIT: {
 				// Only update `state` if `currentPage_` is idle
-				if (currentPage_ && currentPage_->isIdle()) {
+				if (currentPage_ && pageIdle()) {
 					setState(RETROFE_IDLE);
 				}
 				break;
@@ -2628,7 +2719,7 @@ bool RetroFE::run() {
 
 			// Wait for onMenuExit animation to finish; load previous page; load art
 			case RETROFE_BACK_MENU_EXIT:
-			if (currentPage_ && currentPage_->isIdle()) {
+			if (currentPage_ && pageIdle()) {
 				// Store current state before transition
 				std::string collectionName = currentPage_->getCollectionName();
 				if (!collectionName.empty()) {
@@ -2736,7 +2827,7 @@ bool RetroFE::run() {
 			break;
 			// Wait for onMenuEnter animation to finish
 			case RETROFE_BACK_MENU_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				bool collectionInputClear = false;
 				config_.getProperty(OPTION_COLLECTIONINPUTCLEAR, collectionInputClear);
@@ -2754,7 +2845,7 @@ bool RetroFE::run() {
 
 			// Start menu mode
 			case RETROFE_MENUMODE_START_REQUEST:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				std::string collectionName = currentPage_->getCollectionName();
 				lastMenuOffsets_[collectionName] = currentPage_->getScrollOffsetIndex();
@@ -2802,7 +2893,7 @@ bool RetroFE::run() {
 			break;
 
 			case RETROFE_MENUMODE_START_ENTER:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				SDL_Event e;
 				while (SDL_PollEvent(&e))
@@ -2814,7 +2905,7 @@ bool RetroFE::run() {
 
 			// Wait for splash mode animation to finish
 			case RETROFE_NEW:
-			if (currentPage_ && currentPage_->isIdle())
+			if (currentPage_ && pageIdle())
 			{
 				setState(RETROFE_IDLE);
 			}
@@ -3078,11 +3169,25 @@ bool RetroFE::run() {
 
 void RetroFE::setState(RETROFE_STATE newState) {
 	if (newState != state_) {
+		stateSince_ = SDL_GetTicks();   // ArcadeMaster: pageIdle() times a waiting step from here
 		LOG_DEBUG("RetroFE", "Transitioning from " + stateToString(state_) + " to " + stateToString(newState));
 	}
 	state_ = newState;
 }
 
+
+// ArcadeMaster: a waiting step (filter change, highlight, menu jump ...) goes on once the page is idle. On the pedestal a
+// page stayed "busy" for minutes and every input was ignored (2026-11-26). After 3 s of waiting the step goes on anyway
+// and the log says which step it was, so the busy part can be found and fixed.
+bool RetroFE::pageIdle() {
+	if (!currentPage_) return false;
+	if (currentPage_->isIdle()) return true;
+	if (state_ == RETROFE_IDLE) return false;                      // only a step that is waiting times out
+	if (SDL_GetTicks() - stateSince_ < 3000) return false;
+	static RETROFE_STATE warned = RETROFE_IDLE;
+	if (warned != state_) { warned = state_; LOG_WARNING("RetroFE", "page still busy after 3 s in " + stateToString(state_) + " - going on anyway"); }
+	return true;
+}
 RetroFE::RETROFE_STATE RetroFE::getState() const {
 	return state_;
 }
@@ -3385,6 +3490,16 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	bool infoExitOnScroll = false;
 	config_.getProperty(OPTION_INFOEXITONSCROLL, infoExitOnScroll);
 
+	// ArcadeMaster (cabinet link): "somebody is here" = a menu action was pressed (or a real direction, below). Raw
+	// button events are not used: an H-shifter left in gear is a held button and reports itself as a press.
+	if (AmLink::instance().enabled()) {
+		static const UserInput::KeyCode_E amActions[] = { UserInput::KeyCodeSelect, UserInput::KeyCodeBack, UserInput::KeyCodeRandom,
+			UserInput::KeyCodeLetterUp, UserInput::KeyCodeLetterDown, UserInput::KeyCodePageUp, UserInput::KeyCodePageDown,
+			UserInput::KeyCodeCyclePlaylist, UserInput::KeyCodeNextCyclePlaylist, UserInput::KeyCodePrevCyclePlaylist,
+			UserInput::KeyCodeNextPlaylist, UserInput::KeyCodePrevPlaylist, UserInput::KeyCodeTogglePlaylist, UserInput::KeyCodeFavPlaylist };
+		for (UserInput::KeyCode_E k : amActions) { if (input_.newKeyPressed(k)) { AmLink::instance().noteUserInput(); break; } }
+	}
+
 	// 1. Unified Activity Tracking Matrix
 	const bool userScrolling =
 		input_.keystate(UserInput::KeyCodePageUp) || input_.keystate(UserInput::KeyCodePageDown) ||
@@ -3409,19 +3524,35 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	bool crossAxisScrolling = false;
 	Page::ScrollDirection dir = Page::ScrollDirectionIdle;
 
+	// ArcadeMaster: opposite directions held together cancel. Nobody can hold up and down on one stick; it happens on a
+	// racing rig, where pedal axes are bound to up / down, for a moment after the input states are reset - and "down
+	// wins" then moved the list one game on entering every menu (the first game was skipped).
+	const bool amUp = input_.keystate(UserInput::KeyCodeUp) && !input_.keystate(UserInput::KeyCodeDown);
+	const bool amDown = input_.keystate(UserInput::KeyCodeDown) && !input_.keystate(UserInput::KeyCodeUp);
+	const bool amLeft = input_.keystate(UserInput::KeyCodeLeft) && !input_.keystate(UserInput::KeyCodeRight);
+	const bool amRight = input_.keystate(UserInput::KeyCodeRight) && !input_.keystate(UserInput::KeyCodeLeft);
+
+	// ArcadeMaster: a cross-axis direction scrolls the layout's playlist menu. A layout without one (ArcadeMaster,
+	// CoinOPS) gets nothing from that, and the press never reached nextPlaylist / prevPlaylist bound to the same keys:
+	// Left / Right could not change the filters or reach Settings. Without a playlist menu the cross axis is left alone.
+	const bool amCross = page->hasPlaylistMenu();
 	if (page->isHorizontalScroll()) {
 		// --- Horizontal Theme Mappings ---
-		if (input_.keystate(UserInput::KeyCodeDown)) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistForward; }
-		else if (input_.keystate(UserInput::KeyCodeUp)) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistBack; }
-		else if (input_.keystate(UserInput::KeyCodeRight)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
-		else if (input_.keystate(UserInput::KeyCodeLeft)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
+		if (amDown && !amCross) {}
+		else if (amUp && !amCross) {}
+		else if (amDown) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistForward; }
+		else if (amUp) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistBack; }
+		else if (amRight) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
+		else if (amLeft) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
 	}
 	else {
 		// --- Vertical Theme Mappings ---
-		if (input_.keystate(UserInput::KeyCodeRight)) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistForward; }
-		else if (input_.keystate(UserInput::KeyCodeLeft)) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistBack; }
-		else if (input_.keystate(UserInput::KeyCodeDown)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
-		else if (input_.keystate(UserInput::KeyCodeUp)) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
+		if (amRight && !amCross) {}
+		else if (amLeft && !amCross) {}
+		else if (amRight) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistForward; }
+		else if (amLeft) { crossAxisScrolling = page->isGamesScrolling();    dir = Page::ScrollDirectionPlaylistBack; }
+		else if (amDown) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionForward; }
+		else if (amUp) { crossAxisScrolling = page->isPlaylistScrolling(); dir = Page::ScrollDirectionBack; }
 	}
 
 	// Honor Kiosk Mode: Intercept cross-axis switches, but leave regular list wheel scrolling wide open!
@@ -3431,6 +3562,7 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 	}
 
 	if (dir != Page::ScrollDirectionIdle) {
+		AmLink::instance().noteUserInput();   // ArcadeMaster (cabinet link): a real direction - somebody is here
 		if (crossAxisScrolling) {
 			return RETROFE_HIGHLIGHT_REQUEST;
 		}
@@ -3509,6 +3641,22 @@ RetroFE::RETROFE_STATE RetroFE::processUserInput(Page* page) {
 		RETROFE_STATE fallbackBackState = (page->getMenuDepth() == 1 || !backOnCollection) ? RETROFE_COLLECTION_UP_REQUEST : RETROFE_BACK_REQUEST;
 
 		// --- A. Kiosk Mode Unrestricted Inputs ---
+		// ArcadeMaster: one key shows the game's info, one goes back to the video (a toggle could look like it did
+		// nothing when the layout had already faded the info in by itself). Hide also fires gameInfoExit when the info
+		// was only the layout's own timed panel.
+		if (input_.newKeyPressed(UserInput::KeyCodeShowGameInfo)) {
+			attract_.reset();
+			input_.resetStates();
+			if (!gameInfo_) return RETROFE_GAMEINFO_ENTER;
+			return RETROFE_IDLE;
+		}
+		if (input_.newKeyPressed(UserInput::KeyCodeHideGameInfo)) {
+			attract_.reset();
+			input_.resetStates();
+			if (gameInfo_) return RETROFE_GAMEINFO_EXIT;
+			currentPage_->gameInfoExit();
+			return RETROFE_IDLE;
+		}
 		if (input_.newKeyPressed(UserInput::KeyCodeToggleGameInfo) || (input_.keystate(UserInput::KeyCodeGameInfoCombo1) && input_.newKeyPressed(UserInput::KeyCodeGameInfoCombo2))) {
 			attract_.reset();
 			input_.resetStates();

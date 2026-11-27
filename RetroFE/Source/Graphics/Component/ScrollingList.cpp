@@ -272,6 +272,25 @@ void ScrollingList::selectItemByName(std::string_view name)
     }
 }
 
+// ArcadeMaster (cabinet link): a merged menu can hold the same game name from two collections (Daytona single /
+// linked), so the collection is part of the match; an empty collection matches any. False = not in this list.
+bool ScrollingList::selectItem(std::string_view name, std::string_view collection)
+{
+    if (!items_ || items_->empty())
+        return false;
+
+    size_t size = items_->size();
+    for (size_t i = 0; i < size; ++i) {
+        size_t index = loopDecrement(itemIndex_, i, size);
+        const Item* it = (*items_)[(index + selectedOffsetIndex_) % size];
+        if (it && it->name == name && (collection.empty() || !it->collectionInfo || it->collectionInfo->name == collection)) {
+            itemIndex_ = index;
+            return true;
+        }
+    }
+    return false;
+}
+
 void ScrollingList::restartByMonitor(int monitor) const {
     for (Component* c : getComponents()) {
         if (c && c->baseViewInfo.Monitor == monitor)

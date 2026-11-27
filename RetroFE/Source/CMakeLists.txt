@@ -303,6 +303,7 @@ set(RETROFE_SOURCES
 	"${RETROFE_DIR}/Source/Control/TouchDragHandler.cpp"
 	"${RETROFE_DIR}/Source/Control/PointerInput.cpp"
 	"${RETROFE_DIR}/Source/Control/Haptics.cpp"
+	"${RETROFE_DIR}/Source/Control/AmLink.cpp"
     "${RETROFE_DIR}/Source/Control/Restrictor/Restrictor.cpp"
     "${RETROFE_DIR}/Source/Control/Restrictor/RestrictorManager.cpp"
     "${RETROFE_DIR}/Source/Control/Restrictor/ServoStikRestrictor.cpp"
