@@ -118,15 +118,16 @@ void VideoComponent::computeDesiredIntent(bool visibleNow, const VideoSnapshot& 
     }
     wasVisible_ = visibleNow;
 
-    // 2. Standalone Logic
-    if (listId_ == -1) {
-        desiredState_ = visibleNow ? PlaybackTarget::Playing : PlaybackTarget::Paused;
+    // 3. Launch Lock - ArcadeMaster: checked before the standalone case, so a theme's preview video on the main screen
+    // pauses while a game runs too (it played on with sound behind TeknoParrot games). Marquee screens keep playing.
+    if (currentPage_->getIsLaunched() && baseViewInfo.Monitor == 0) {
+        desiredState_ = PlaybackTarget::Paused;
         return;
     }
 
-    // 3. Launch Lock
-    if (currentPage_->getIsLaunched() && baseViewInfo.Monitor == 0) {
-        desiredState_ = PlaybackTarget::Paused;
+    // 2. Standalone Logic
+    if (listId_ == -1) {
+        desiredState_ = visibleNow ? PlaybackTarget::Playing : PlaybackTarget::Paused;
         return;
     }
 

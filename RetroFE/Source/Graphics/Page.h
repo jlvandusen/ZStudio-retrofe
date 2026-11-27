@@ -85,6 +85,7 @@ public:
     size_t getCollectionSize();
     size_t getSelectedIndex();
     void selectRandom();
+    bool selectItemByName(const std::string& name, const std::string& collection);   // ArcadeMaster: cabinet link
     void selectRandomPlaylist(CollectionInfo* collection, std::vector<std::string> cycleVector);
     void start();
     void stop();
@@ -161,6 +162,7 @@ public:
     void  setUserScrollInputActive(bool active);
     bool isPlaylistScrolling() const;
     bool isGamesScrolling() const;
+    bool hasPlaylistMenu() const { return playlistMenu_ != nullptr; }   // ArcadeMaster: the layout has a playlist menu
     bool  isPlaying() const;
     void  resetScrollPeriod() const;
     void decelerateScrollPeriod(float dt);

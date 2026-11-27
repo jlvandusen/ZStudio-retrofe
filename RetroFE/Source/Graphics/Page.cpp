@@ -618,7 +618,9 @@ void Page::triggerEventOnAllMenus(const std::string& event) {
 				component->triggerEvent(event, index);
 		}
 	}
-	invalidateIdleCache();
+	// ArcadeMaster: "attract" is sent every frame while attract mode runs. Clearing the idle cache for it meant attract
+	// never saw the list standing still: it moved one game and then sat there for good (RACE2, 2026-11-26)
+	if (event != "attract") invalidateIdleCache();
 }
 
 
@@ -739,6 +741,26 @@ void Page::selectRandom() {
 		highlightSoundChunk_->play();
 	}
 	invalidateIdleCache();
+}
+
+// ArcadeMaster (cabinet link): the same steps as selectRandom(), to a named game. False = not in this list.
+bool Page::selectItemByName(const std::string& name, const std::string& collection) {
+	ScrollingList* amenu = getAnActiveMenu();
+	if (!amenu) return false;
+	if (!amenu->selectItem(name, collection)) return false;
+
+	size_t index = amenu->getScrollOffsetIndex();
+	for (auto it = activeMenu_.begin(); it != activeMenu_.end(); it++) {
+		ScrollingList* menu = *it;
+		if (menu && menu != amenu && !menu->isPlaylist()) {
+			menu->syncToSelectedIndex(index);
+		}
+	}
+
+	setSelectedItem();
+	onNewScrollItemSelected();
+	invalidateIdleCache();
+	return true;
 }
 
 void Page::selectRandomPlaylist(CollectionInfo* collection, std::vector<std::string> cycleVector) {

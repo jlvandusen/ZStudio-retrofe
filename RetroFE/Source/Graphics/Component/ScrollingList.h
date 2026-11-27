@@ -144,6 +144,7 @@ public:
     void deallocateTexture(size_t index);
     void setItems(std::vector<Item*>* items);
     void selectItemByName(std::string_view name);
+    bool selectItem(std::string_view name, std::string_view collection);   // ArcadeMaster: cabinet link
     void restartByMonitor(int monitor) const;
     const std::string& getSelectedItemName();
     void destroyItems();

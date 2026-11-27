@@ -65,12 +65,33 @@ const char* PointerInput::name(Gesture g) {
 
 // RetroFE monitor number of the window under the finger (-1 if unknown, e.g. a touch outside our windows)
 int PointerInput::screenOfWindow(Uint32 windowID) {
-    if (windowID == 0) return -1;
-    for (int s = 0; s < SDL::getNumScreens() && s < MaxScreens; ++s) {
+    if (windowID == 0) {
+        // ArcadeMaster: on Windows a touch screen's finger events can come without a window (windowID 0) - the pedestal's
+        // touch bar never answered ("screen -1"). Windows still moves the pointer to the touch, so the screen whose
+        // window holds the pointer is the one touched.
+        int mx = 0, my = 0;
+        SDL_GetGlobalMouseState(&mx, &my);
+        for (int s = 0; s < SDL::getScreenCount() && s < MaxScreens; ++s) {
+            SDL_Window* w = SDL::getWindow(s);
+            if (!w) continue;
+            int wx = 0, wy = 0, ww = 0, wh = 0;
+            SDL_GetWindowPosition(w, &wx, &wy);
+            SDL_GetWindowSize(w, &ww, &wh);
+            if (mx >= wx && mx < wx + ww && my >= wy && my < wy + wh) return s;
+        }
+        // ArcadeMaster: the pointer check missed (the pedestal kept "screen -1"): a cabinet's touch panel is its extra
+        // screen, so with more than one screen the last one is the touched one
+        const int n = SDL::getScreenCount() < MaxScreens ? SDL::getScreenCount() : MaxScreens;
+        LOG_DEBUG("Pointer", "touch without a window, pointer " << mx << "," << my << " on no screen - using screen " << (n > 1 ? n - 1 : -1));
+        return n > 1 ? n - 1 : -1;
+    }
+    for (int s = 0; s < SDL::getScreenCount() && s < MaxScreens; ++s) {
         SDL_Window* w = SDL::getWindow(s);
         if (w && SDL_GetWindowID(w) == windowID) return s;
     }
-    return -1;
+    // ArcadeMaster: a window ID that is none of ours (the pedestal's touch screen reports one) - treat it like no window
+    LOG_DEBUG("Pointer", "touch on window " << windowID << ", not one of ours");
+    return screenOfWindow(0);
 }
 
 void PointerInput::pulse(Gesture g, Uint32 now, int slot) {

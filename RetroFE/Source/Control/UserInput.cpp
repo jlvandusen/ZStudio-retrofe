@@ -112,6 +112,8 @@ bool UserInput::initialize()
     MapKey("cycleCollection", KeyCodeCycleCollection, false);
     MapKey("prevCycleCollection", KeyCodePrevCycleCollection, false);
     MapKey("toggleGameInfo", KeyCodeToggleGameInfo, false);
+    MapKey("showGameInfo", KeyCodeShowGameInfo, false);
+    MapKey("hideGameInfo", KeyCodeHideGameInfo, false);
     MapKey("toggleCollectionInfo", KeyCodeToggleCollectionInfo, false);
     MapKey("toggleBuildInfo", KeyCodeToggleBuildInfo, false);
     MapKey("settings", KeyCodeSettings, false);

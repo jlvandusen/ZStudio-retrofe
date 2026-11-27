@@ -89,6 +89,8 @@ public:
         KeyCodeCycleCollection,
         KeyCodePrevCycleCollection,
         KeyCodeToggleGameInfo,
+        KeyCodeShowGameInfo,     // ArcadeMaster: info on (Page Down)
+        KeyCodeHideGameInfo,     // ArcadeMaster: back to the video (Page Up)
         KeyCodeToggleCollectionInfo,
         KeyCodeToggleBuildInfo,
         KeyCodeSettings,

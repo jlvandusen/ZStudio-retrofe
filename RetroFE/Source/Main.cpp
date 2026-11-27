@@ -329,10 +329,20 @@ int main(int argc, char** argv)
 
 #ifdef WIN32
     std::string gstPluginPath = Utils::combinePath(Configuration::absolutePath, "retrofe");
+    // ArcadeMaster: CoinOPS builds keep the exe and GStreamer's plugins in "core", not "retrofe". With no "retrofe"
+    // folder GStreamer found no plugins ("no such element factory playbin") and no video played. Use the exe's folder.
+    if (!std::filesystem::is_directory(gstPluginPath)) {
+        if (char* base = SDL_GetBasePath()) {
+            std::string b(base);
+            SDL_free(base);
+            while (!b.empty() && (b.back() == '\\' || b.back() == '/')) b.pop_back();
+            if (!b.empty()) gstPluginPath = b;
+        }
+    }
     Utils::setEnvVar("GST_PLUGIN_PATH", gstPluginPath);
     Utils::setEnvVar("FREI0R_PATH", gstPluginPath);
-	Utils::setEnvVar("GST_PLUGIN_SCANNER", Utils::combinePath(Configuration::absolutePath, "retrofe", "gst-plugin-scanner.exe"));
-	Utils::setEnvVar("GST_REGISTRY", Utils::combinePath(Configuration::absolutePath, "retrofe", "registry.bin"));
+	Utils::setEnvVar("GST_PLUGIN_SCANNER", Utils::combinePath(gstPluginPath, "gst-plugin-scanner.exe"));
+	Utils::setEnvVar("GST_REGISTRY", Utils::combinePath(gstPluginPath, "registry.bin"));
 #endif
 
     gst_debug_set_default_threshold(GST_LEVEL_ERROR);
