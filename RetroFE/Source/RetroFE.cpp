@@ -757,6 +757,9 @@ void RetroFE::linkPoll() {
 	while (link.receive(cmd)) {
 		// ArcadeMaster: attract mode keeps the menu moving, so a command never found it standing still (the touch search
 		// typed for 20 s and its pick was dropped every time): a command stops attract, the helper's resend then lands
+		// ArcadeMaster: "reload" - build the open page again from the layout files on disk (theme design; the request waits
+		// until the menu stands still, so it is never dropped)
+		if (cmd == "reload") { reloadRequested_.store(true); continue; }
 		if (!still || kioskLock_) { if (!kioskLock_) attract_.reset(); continue; }   // busy: dropped, the helper sends again
 		std::vector<std::string> p;
 		std::stringstream ss(cmd); std::string part;
@@ -797,6 +800,7 @@ void RetroFE::linkPoll() {
 
 // ArcadeMaster: settings.conf "perfLog = N" (frame-time telemetry below); also turns on the list-open timing
 static int g_perfLogSec = 0;
+static bool g_layoutHotReload = false;   // settings.conf layoutHotReload = yes (design mode): a saved layout file reloads the page
 static int g_uploadBudgetMs = 0;   // settings.conf textureUploadBudgetMs (Image::beginFrameUploads)
 
 void RetroFE::preparePageForFirstRender(Page* page, int maxPasses) {
@@ -972,6 +976,7 @@ bool RetroFE::run() {
 		return false;
 	}
 	Haptics::instance().initialize(config_);   // ArcadeMaster: frontend force feedback (ffb = yes)
+	config_.getProperty("layoutHotReload", g_layoutHotReload);   // ArcadeMaster: docs/21 phase 4
 	config_.getProperty("perfLog", g_perfLogSec);   
 	config_.getProperty("textureUploadBudgetMs", g_uploadBudgetMs);   // ArcadeMaster: docs/14 item 5 (0 = off)   // ArcadeMaster: frame-time telemetry interval (s)
 
@@ -1312,12 +1317,41 @@ bool RetroFE::run() {
 			mp->pump();
 		}
 		
-		// Check for pending hot-reload (SIGUSR1). Only act when safe: idle, at root depth.
-		if (!splashMode && reloadRequested_.exchange(false)
-			&& state_ == RETROFE_IDLE && pages_.empty()
-			&& currentPage_ && pageIdle())
+		// ArcadeMaster (docs/21 phase 4, theme design): with settings.conf "layoutHotReload = yes" the layout's own files
+		// are looked at once a second; a saved change to an .xml / .png / .jpg / .txt / .conf under it asks for a reload
+		// of the open page - the selection, playlist and scroll position are kept. Off by default: a cabinet does not
+		// pay for the look-up.
+		if (g_layoutHotReload && !splashMode) {
+			static Uint32 amLast = 0; static fs::file_time_type amNewest{}; static bool amPrimed = false;
+			const Uint32 amT = SDL_GetTicks();
+			if (amT - amLast >= 1000) {
+				amLast = amT;
+				std::string amLayout; config_.getProperty(OPTION_LAYOUT, amLayout);
+				fs::file_time_type newest{}; std::error_code ec;
+				const fs::path dir = fs::path(Configuration::absolutePath) / "layouts" / amLayout;
+				for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec)) {
+					std::error_code fe;
+					if (!it->is_regular_file(fe)) continue;
+					const std::string ext = it->path().extension().string();
+					if (ext != ".xml" && ext != ".png" && ext != ".jpg" && ext != ".txt" && ext != ".conf") continue;
+					const auto w = it->last_write_time(fe);
+					if (!fe && w > newest) newest = w;
+				}
+				if (amPrimed && newest > amNewest) { LOG_INFO("RetroFE", "a layout file changed on disk"); reloadRequested_.store(true); }
+				if (newest > amNewest) amNewest = newest;
+				amPrimed = true;
+			}
+		}
+
+		// Check for pending hot-reload (SIGUSR1, the watcher above, the cabinet link's "reload"). Only act when safe: the
+		// menu stands still on a page that is not a nested menu. ArcadeMaster: the request is kept until then (it used to
+		// be dropped when the moment was wrong, and it was refused inside every game list, where pages_ is not empty).
+		if (!splashMode && reloadRequested_.load()
+			&& state_ == RETROFE_IDLE && !menuMode_
+			&& currentPage_ && currentPage_->getMenuDepth() <= 1 && pageIdle()
+			&& reloadRequested_.exchange(false))
 		{
-			LOG_INFO("RetroFE", "SIGUSR1 received – reloading layout XML");
+			LOG_INFO("RetroFE", "reloading the layout from disk");
 			setState(RETROFE_RELOAD_REQUEST);
 		}
 
