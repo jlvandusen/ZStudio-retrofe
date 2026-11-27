@@ -16,6 +16,7 @@
 
  // --- Core Required Headers ---
 #include "Launcher.h"
+#include "GameHandOff.h"
 #include "../Collection/CollectionInfoBuilder.h"
 #include "../Collection/Item.h"
 #include "../Database/Configuration.h"
@@ -448,6 +449,12 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
     processManager = std::make_unique<UnixProcessManager>();
 #endif
 
+    // 6b') The game hand-off (docs/21 phase 2): on screen, in front, the frontend out of the way - settings.conf
+    // "gameHandOff = true". Its baseline is taken here, before the launch: any big window after this can be the game.
+    bool gameHandOffOn = false;
+    config_.getProperty("gameHandOff", gameHandOffOn);
+    GameHandOff handOff(gameHandOffOn && !reboot && !isAttractMode && !launchingNestedRetroFE);
+
     // 6c) Launch the main process
     if (!processManager->launch(executablePath, args, currentDirectory)) {
         LOG_ERROR("Launcher", "Execution failed for: " + executablePath);
@@ -530,7 +537,9 @@ bool Launcher::run(std::string collection, Item* collectionItem, Page* currentPa
 
                 return inputMonitor.checkInputEvents() == InputDetectionResult::QuitInput;
                 };
-            WaitResult result = processManager->wait(0, quitCheck, onFrameTick);
+            // the hand-off works between frames of the wait loop (it does nothing when it is off)
+            FrameTickCallback tickWithHandOff = [&handOff, &onFrameTick]() { handOff.tick(); if (onFrameTick) onFrameTick(); };
+            WaitResult result = processManager->wait(0, quitCheck, handOff.enabled() ? tickWithHandOff : onFrameTick);
 
             if (result == WaitResult::UserInput) {
                 LOG_INFO("Launcher", "User pressed quit combo during game. Terminating process.");
